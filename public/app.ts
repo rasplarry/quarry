@@ -47,6 +47,15 @@ const tagColorPresets = {
   Staging: "#c98210",
   Production: "#d2463f"
 };
+const defaultSettings = {
+  openAiKey: "",
+  openAiModel: "gpt-5.4-mini",
+  sqlGenerationSystemPrompt: null,
+  aiSendSchemaInfo: true,
+  aiReadOnlyOnly: false,
+  rememberSecrets: true,
+  tagColors: {}
+};
 const sqlAutocompleteKeywords = [
   "SELECT", "FROM", "WHERE", "JOIN", "LEFT JOIN", "INNER JOIN", "ORDER BY", "GROUP BY", "HAVING",
   "LIMIT", "OFFSET", "INSERT", "UPDATE", "DELETE", "RETURNING", "COUNT", "SUM", "AVG", "MIN", "MAX",
@@ -274,14 +283,11 @@ function defaultSqlTab(sql = "select now();", title = "SQL 1") {
 
 const state = {
   connections: load(storageKeys.connections, []),
-  settings: load(storageKeys.settings, {
-    openAiKey: "",
-    openAiModel: "gpt-5.4-mini",
+  settings: {
+    ...defaultSettings,
     sqlGenerationSystemPrompt: defaultSqlGenerationSystemPrompt,
-    aiSendSchemaInfo: true,
-    aiReadOnlyOnly: false,
-    rememberSecrets: true
-  }),
+    ...load(storageKeys.settings, {})
+  },
   history: load(storageKeys.history, []),
   favorites: load(storageKeys.favorites, []),
   favoriteFolders: load(storageKeys.favoriteFolders, {}),
@@ -368,8 +374,107 @@ function tagPreset(tag) {
   return tagValues.find((value) => value.toLowerCase() === normalized.toLowerCase()) || null;
 }
 
+function tagKey(tag) {
+  return normalizeTag(tag).toLowerCase();
+}
+
+function normalizeHexColor(color) {
+  const value = String(color || "").trim();
+  return /^#[0-9a-f]{6}$/i.test(value) ? value.toLowerCase() : "";
+}
+
+function storedTagRecord(tag) {
+  const record = state?.settings?.tagColors?.[tagKey(tag)];
+  if (!record) return null;
+  if (typeof record === "string") {
+    const color = normalizeHexColor(record);
+    return color ? { tag: normalizeTag(tag), color } : null;
+  }
+  const color = normalizeHexColor(record.color);
+  if (!color) return null;
+  return {
+    tag: normalizeTag(record.tag || tag),
+    color
+  };
+}
+
+function storedTagColor(tag) {
+  return storedTagRecord(tag)?.color || "";
+}
+
+function connectionTagColor(tag) {
+  const key = tagKey(tag);
+  const connection = state?.connections?.find((item) => tagKey(item.tag) === key && normalizeHexColor(item.tagColor));
+  return normalizeHexColor(connection?.tagColor);
+}
+
 function tagColor(tag, color) {
-  return color || tagColorPresets[tagPreset(tag)] || "#0f8f8c";
+  return storedTagColor(tag) || normalizeHexColor(color) || connectionTagColor(tag) || tagColorPresets[tagPreset(tag)] || "#0f8f8c";
+}
+
+function rememberTagColor(tag, color) {
+  const normalized = normalizeTag(tag);
+  const nextColor = normalizeHexColor(color) || tagColor(normalized);
+  state.settings.tagColors = state.settings.tagColors || {};
+  state.settings.tagColors[tagKey(normalized)] = { tag: normalized, color: nextColor };
+  saveSettingsState();
+  return nextColor;
+}
+
+function syncConnectionTagColors(tag, color) {
+  const key = tagKey(tag);
+  const nextColor = normalizeHexColor(color) || tagColor(tag);
+  for (const connection of state.connections) {
+    if (tagKey(connection.tag) === key) {
+      connection.tag = normalizeTag(connection.tag);
+      connection.tagColor = nextColor;
+    }
+  }
+}
+
+function applySharedTagColor(connection) {
+  const tag = normalizeTag(connection.tag);
+  const color = rememberTagColor(tag, connection.tagColor);
+  connection.tag = tag;
+  connection.tagColor = color;
+  syncConnectionTagColors(tag, color);
+  return connection;
+}
+
+function knownTagLabels() {
+  const labels = new Map(tagValues.map((tag) => [tag.toLowerCase(), tag]));
+  for (const connection of state.connections) {
+    const tag = normalizeTag(connection.tag);
+    labels.set(tag.toLowerCase(), tag);
+  }
+  for (const [key, record] of Object.entries(state.settings.tagColors || {})) {
+    const tag = normalizeTag(typeof record === "string" ? key : record?.tag || key);
+    if (tag) labels.set(tag.toLowerCase(), tag);
+  }
+  return [...labels.values()].sort((a, b) => {
+    const presetA = tagValues.findIndex((tag) => tag.toLowerCase() === a.toLowerCase());
+    const presetB = tagValues.findIndex((tag) => tag.toLowerCase() === b.toLowerCase());
+    if (presetA >= 0 || presetB >= 0) return (presetA < 0 ? 999 : presetA) - (presetB < 0 ? 999 : presetB);
+    return a.localeCompare(b);
+  });
+}
+
+function renderTagDatalist() {
+  const datalist = $("#tagPresets");
+  if (!datalist) return;
+  datalist.replaceChildren(...knownTagLabels().map((tag) => {
+    const option = document.createElement("option");
+    option.value = tag;
+    return option;
+  }));
+}
+
+function applyStoredTagColorToForm() {
+  const rawTag = $("#connTag")?.value.trim();
+  if (!rawTag) return;
+  const tag = normalizeTag(rawTag);
+  const nextColor = storedTagColor(tag) || connectionTagColor(tag) || tagColorPresets[tagPreset(tag)];
+  if (nextColor) $("#connTagColor").value = nextColor;
 }
 
 function hexToRgb(hex) {
@@ -2593,6 +2698,7 @@ function openSqlGenerationSettings() {
 }
 
 function openConnectionDialog(connection = null) {
+  renderTagDatalist();
   $("#connectionDialogTitle").textContent = connection ? "Edit connection" : "New connection";
   $("#connectionForm").dataset.id = connection?.id || "";
   $("#connName").value = connection?.name || "";
@@ -2647,6 +2753,7 @@ function readConnectionForm() {
 }
 
 function upsertConnection(connection) {
+  applySharedTagColor(connection);
   const index = state.connections.findIndex((item) => item.id === connection.id);
   if (index >= 0) state.connections.splice(index, 1, connection);
   else state.connections.unshift(connection);
@@ -2655,6 +2762,7 @@ function upsertConnection(connection) {
     openTab.title = connection.name;
   }
   save(storageKeys.connections, state.connections);
+  renderTagDatalist();
   renderConnections();
   renderConnectionTabs();
 }
@@ -2665,8 +2773,10 @@ function duplicateConnection(connection) {
     : JSON.parse(JSON.stringify(connection));
   copy.id = uid();
   copy.name = `${connection.name} Copied`;
+  applySharedTagColor(copy);
   state.connections.unshift(copy);
   save(storageKeys.connections, state.connections);
+  renderTagDatalist();
   renderConnections();
   showToast(`Duplicated ${connection.name}.`);
 }
@@ -6011,6 +6121,7 @@ async function commitEdits(changes = state.pendingEdits, objectChanges = state.p
 function saveSettings(event) {
   event.preventDefault();
   state.settings = {
+    ...state.settings,
     openAiKey: $("#openAiKey").value.trim(),
     openAiModel: $("#openAiModel").value.trim() || "gpt-5.4-mini",
     sqlGenerationSystemPrompt: $("#sqlGenerationSystemPrompt").value.trim() || defaultSqlGenerationSystemPrompt,
@@ -6024,12 +6135,14 @@ function saveSettings(event) {
 }
 
 function hydrateSettings() {
+  state.settings.tagColors = state.settings.tagColors || {};
   $("#openAiKey").value = state.settings.openAiKey || "";
   $("#openAiModel").value = state.settings.openAiModel || "gpt-5.4-mini";
   $("#sqlGenerationSystemPrompt").value = sqlGenerationSystemPrompt();
   $("#aiSendSchemaInfo").checked = aiSendSchemaInfo();
   $("#aiReadOnlyOnly").checked = aiReadOnlyOnly();
   $("#rememberSecrets").checked = state.settings.rememberSecrets !== false;
+  renderTagDatalist();
 }
 
 function bindEvents() {
@@ -6171,8 +6284,11 @@ function bindEvents() {
     $("#connectionDialog").close();
   });
   $("#connTag").addEventListener("input", () => {
-    const preset = tagPreset($("#connTag").value);
-    if (preset) $("#connTagColor").value = tagColorPresets[preset];
+    applyStoredTagColorToForm();
+  });
+  $("#connTag").addEventListener("change", () => {
+    $("#connTag").value = normalizeTag($("#connTag").value);
+    applyStoredTagColorToForm();
   });
   $("#testConnectionButton").addEventListener("click", async () => {
     const testButton = $("#testConnectionButton");
