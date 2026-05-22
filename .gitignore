@@ -1,0 +1,8 @@
+.DS_Store
+.playwright-mcp/
+.omc/
+node_modules/
+dist/
+build/
+public/app.js
+src/server.js

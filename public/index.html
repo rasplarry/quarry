@@ -1,0 +1,689 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Quarry</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="rail" aria-label="Primary">
+        <button class="rail-button active" data-view="connections" title="Connections" aria-label="Connections">
+          <span data-icon="database"></span>
+        </button>
+        <button class="rail-button" data-view="history" title="History" aria-label="History">
+          <span data-icon="clock"></span>
+        </button>
+        <button class="rail-button" data-view="favorites" title="Favorites" aria-label="Favorites">
+          <span data-icon="star"></span>
+        </button>
+        <button class="rail-button" data-view="settings" title="Settings" aria-label="Settings">
+          <span data-icon="settings"></span>
+        </button>
+      </aside>
+
+      <aside class="sidebar">
+        <div class="sidebar-section active" id="connectionsPanel">
+          <div class="sidebar-header">
+            <div>
+              <h1>Quarry</h1>
+              <p id="connectionState">No connection</p>
+            </div>
+            <button class="icon-button" id="newConnectionButton" title="New connection" aria-label="New connection">
+              <span data-icon="plus"></span>
+            </button>
+          </div>
+
+          <div class="search-wrap">
+            <span data-icon="search"></span>
+            <input id="connectionSearch" type="search" placeholder="Search connections" />
+          </div>
+
+          <div class="connection-list" id="connectionList"></div>
+          <div class="connection-tab-bar" id="connectionTabBar"></div>
+
+          <div class="object-toolbar">
+            <button class="tool-button compact-tool" id="openDatabaseButton" title="Open database" aria-label="Open database">
+              <span data-icon="database"></span>
+              <span id="activeDatabaseLabel">Database</span>
+            </button>
+            <div>
+              <button class="icon-button" id="refreshSchemaButton" title="Refresh schema" aria-label="Refresh schema">
+                <span data-icon="refresh"></span>
+              </button>
+            </div>
+          </div>
+          <div class="search-wrap tight">
+            <span data-icon="filter"></span>
+            <input id="objectSearch" type="search" placeholder="Filter tables" />
+          </div>
+          <div class="schema-tree" id="schemaTree"></div>
+          <div class="schema-footer">
+            <button class="icon-button" id="schemaCreateMenuButton" title="New object" aria-label="New object">
+              <span data-icon="plus"></span>
+            </button>
+            <select id="schemaSelect" aria-label="Schema">
+              <option value="">No schema</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="sidebar-section" id="historyPanel">
+          <div class="sidebar-header">
+            <div>
+              <h1>History</h1>
+              <p id="historyCount">0 statements</p>
+            </div>
+            <button class="icon-button" id="clearHistoryButton" title="Clear history" aria-label="Clear history">
+              <span data-icon="trash"></span>
+            </button>
+          </div>
+          <div class="history-list" id="historyList"></div>
+        </div>
+
+        <div class="sidebar-section" id="favoritesPanel">
+          <div class="sidebar-header">
+            <div>
+              <h1>Favorites</h1>
+              <p id="favoriteCount">0 queries</p>
+            </div>
+            <button class="icon-button" id="clearFavoritesButton" title="Clear favorites" aria-label="Clear favorites">
+              <span data-icon="trash"></span>
+            </button>
+          </div>
+          <div class="search-wrap">
+            <span data-icon="search"></span>
+            <input id="favoriteSearch" type="search" placeholder="Search favorites" />
+          </div>
+          <div class="favorite-list" id="favoriteList"></div>
+        </div>
+
+        <div class="sidebar-section" id="settingsPanel">
+          <div class="sidebar-header">
+            <div>
+              <h1>Settings</h1>
+              <p>Local preferences</p>
+            </div>
+          </div>
+          <form class="settings-form" id="settingsForm">
+            <label>
+              OpenAI API key
+              <input id="openAiKey" type="password" autocomplete="off" placeholder="sk-..." />
+            </label>
+            <label>
+              Model
+              <input id="openAiModel" type="text" value="gpt-5.4-mini" />
+            </label>
+            <section class="settings-section" id="sqlGenerationSettings">
+              <div class="settings-section-header">
+                <div>
+                  <h2>SQL Generation</h2>
+                  <p>System prompt used by the magic SQL button.</p>
+                </div>
+                <button class="tool-button" id="resetSqlPromptButton" type="button">Reset</button>
+              </div>
+              <label class="check-row">
+                <input id="aiSendSchemaInfo" type="checkbox" />
+                <span>Send schema information to AI</span>
+              </label>
+              <label class="check-row">
+                <input id="aiReadOnlyOnly" type="checkbox" />
+                <span>Generate read-only SQL only</span>
+              </label>
+              <label>
+                System prompt
+                <textarea id="sqlGenerationSystemPrompt" spellcheck="false"></textarea>
+              </label>
+            </section>
+            <label class="check-row">
+              <input id="rememberSecrets" type="checkbox" />
+              <span>Remember connection passwords locally</span>
+            </label>
+            <button class="primary-button" type="submit">
+              <span data-icon="save"></span>
+              Save settings
+            </button>
+          </form>
+        </div>
+      </aside>
+      <div class="sidebar-resizer" id="sidebarResizer" title="Resize sidebar"></div>
+
+      <main class="workspace">
+        <header class="toolbar">
+          <div class="segmented" role="group" aria-label="Workspace mode">
+            <button class="active" id="sqlModeButton">SQL</button>
+            <button id="dataModeButton">Data</button>
+            <button id="structureModeButton">Structure</button>
+          </div>
+          <div class="toolbar-title" id="workspaceTitle">Query Editor</div>
+          <div class="toolbar-actions">
+            <button class="tool-button refresh-data-action" id="refreshWorkspaceButton" title="Refresh current view" aria-label="Refresh current view" disabled>
+              <span data-icon="refresh"></span>
+            </button>
+            <button class="tool-button" id="favoriteSqlButton" title="Favorite current SQL" aria-label="Favorite current SQL">
+              <span data-icon="star"></span>
+            </button>
+            <button class="tool-button" id="magicButton" title="Generate SQL" aria-label="Generate SQL">
+              <span data-icon="wand"></span>
+              <span class="button-label">SQL</span>
+            </button>
+            <button class="tool-button" id="formatButton" title="Format SQL" aria-label="Format SQL">
+              <span data-icon="align"></span>
+            </button>
+            <button class="tool-button" id="runCurrentButton" title="Run current statement" aria-label="Run current statement">
+              <span data-icon="play"></span>
+              <span class="button-label">Current</span>
+            </button>
+            <button class="primary-button" id="runAllButton" title="Run all SQL" aria-label="Run all SQL">
+              <span data-icon="play"></span>
+              <span class="button-label">Run All</span>
+            </button>
+            <button class="tool-button pending-only" id="commitButton" title="Commit table edits" aria-label="Commit table edits" disabled>
+              <span data-icon="check"></span>
+              <span class="button-label">Commit</span>
+            </button>
+            <button class="tool-button" id="exportDbButton" title="Export database schema" aria-label="Export database schema">
+              <span data-icon="download"></span>
+              <span class="button-label">DB</span>
+            </button>
+            <button class="tool-button" id="importButton" title="Import SQL, JSON, or CSV" aria-label="Import SQL, JSON, or CSV">
+              <span data-icon="upload"></span>
+              <span class="button-label">Import</span>
+            </button>
+          </div>
+        </header>
+
+        <section class="editor-pane" id="editorPane">
+          <div class="editor-topline">
+            <span id="editorConnectionLabel">Disconnected</span>
+            <span id="editorStatus">Ready</span>
+          </div>
+          <div class="sql-tab-bar" id="sqlTabBar"></div>
+          <div class="sql-editor-wrap">
+            <div class="sql-autocomplete-ghost" id="sqlAutocompleteGhost" aria-hidden="true"></div>
+            <textarea id="sqlEditor" spellcheck="false">select now();</textarea>
+          </div>
+          <div class="sql-generation-review" id="sqlGenerationReview" hidden>
+            <div class="sql-generation-head">
+              <div>
+                <strong id="sqlGenerationTitle">AI SQL suggestion</strong>
+                <span id="sqlGenerationSubtitle">Review the change before applying it.</span>
+              </div>
+            </div>
+            <div class="sql-generation-diff" id="sqlGenerationDiff"></div>
+            <div class="sql-generation-actions sql-generation-footer">
+              <button class="tool-button" id="regenerateSqlButton" type="button">
+                <span data-icon="wand"></span>
+                Regenerate
+              </button>
+              <button class="primary-button" id="acceptSqlButton" type="button">
+                <span data-icon="check"></span>
+                Accept
+              </button>
+              <button class="icon-button" id="dismissSqlGenerationButton" type="button" aria-label="Dismiss SQL suggestion">
+                <span data-icon="x"></span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="data-pane" id="dataPane" hidden>
+          <div class="data-tab-bar" id="dataTabBar"></div>
+          <div class="data-topline">
+            <div>
+              <strong id="tableTitle">No table selected</strong>
+              <span id="tableSubtitle"></span>
+            </div>
+            <div class="table-actions">
+              <span id="dataElapsed" class="elapsed-pill">No query</span>
+              <button class="tool-button refresh-data-action" id="refreshDataButton" title="Refresh current rows" aria-label="Refresh current rows" disabled>
+                <span data-icon="refresh"></span>
+              </button>
+              <button class="tool-button" id="tableInfoButton" title="Table info" aria-label="Table info" disabled>
+                <span data-icon="info"></span>
+                Info
+              </button>
+              <div class="search-wrap inline">
+                <span data-icon="search"></span>
+                <input id="gridSearch" type="search" placeholder="Filter visible rows" />
+              </div>
+            </div>
+          </div>
+          <div class="filter-bar" id="filterBar" hidden>
+            <div class="filter-list" id="filterList"></div>
+            <button class="tool-button" id="addFilterButton" type="button">
+              <span data-icon="plus"></span>
+            </button>
+            <button class="tool-button" id="removeFilterButton" type="button">
+              <span data-icon="x"></span>
+            </button>
+            <button class="primary-button" id="applyFiltersButton" type="button">
+              <span data-icon="check"></span>
+              Apply
+            </button>
+          </div>
+          <div class="table-scroll">
+            <div class="data-main">
+              <div class="table-scroll-inner">
+                <table id="dataGrid"></table>
+              </div>
+              <div class="inspector-resizer" id="inspectorResizer" title="Resize inspector" hidden></div>
+              <aside class="row-inspector" id="rowInspector" hidden>
+                <div class="inspector-header">
+                  <strong>Row</strong>
+                  <span id="rowInspectorMeta">Select a row</span>
+                  <button class="icon-button" id="closeRowInspectorButton" type="button" title="Close row detail" aria-label="Close row detail">
+                    <span data-icon="x"></span>
+                  </button>
+                </div>
+                <div class="inspector-body" id="rowInspectorBody"></div>
+              </aside>
+            </div>
+          </div>
+          <div class="data-footer">
+            <span id="pageInfo">Rows 0-0</span>
+            <div class="pager-actions">
+              <button class="primary-button" id="applySelectedButton" type="button" disabled>
+                <span data-icon="save"></span>
+                Save
+              </button>
+              <button class="tool-button" id="prevPageButton" type="button" disabled>
+                <span data-icon="chevronLeft"></span>
+                Prev
+              </button>
+              <button class="tool-button" id="nextPageButton" type="button" disabled>
+                Next
+                <span data-icon="chevronRight"></span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="structure-pane" id="structurePane" hidden>
+          <div class="data-topline structure-topline">
+            <div class="structure-title-wrap">
+              <strong id="structureTitle">No table selected</strong>
+              <span id="structureSubtitle"></span>
+            </div>
+            <div class="structure-topline-actions">
+              <button class="tool-button" id="structureInfoButton" title="Table info" aria-label="Table info" disabled>
+                <span data-icon="info"></span>
+                Info
+              </button>
+              <button class="primary-button" id="saveStructureButton" title="Save structure changes" aria-label="Save structure changes" disabled>
+                <span data-icon="save"></span>
+                Save
+              </button>
+            </div>
+          </div>
+          <div class="structure-scroll" id="structureBody">
+            <div class="empty-state">Open a table to inspect its structure.</div>
+          </div>
+          <div class="structure-action-bar">
+            <button class="tool-button" id="addStructureIndexButton" type="button">
+              <span data-icon="plus"></span>
+              Index
+            </button>
+            <button class="tool-button" id="addStructureColumnButton" type="button">
+              <span data-icon="plus"></span>
+              Column
+            </button>
+            <button class="tool-button" id="structureTriggersButton" type="button">Triggers</button>
+            <button class="tool-button" id="structureBottomInfoButton" type="button">Info</button>
+          </div>
+        </section>
+
+        <div class="workspace-resizer" id="workspaceResizer" title="Resize results"></div>
+
+        <section class="results-pane">
+          <div class="results-header">
+            <div class="result-tabs" id="resultTabs"></div>
+            <div class="result-actions">
+              <span id="resultElapsed" class="elapsed-pill">No query</span>
+              <button class="tool-button" id="exportResultCsvButton" title="Export result as CSV" aria-label="Export result as CSV" disabled>
+                <span data-icon="download"></span>
+                CSV
+              </button>
+              <button class="tool-button" id="exportResultJsonButton" title="Export result as JSON" aria-label="Export result as JSON" disabled>
+                <span data-icon="download"></span>
+                JSON
+              </button>
+              <span id="resultMeta">No results</span>
+            </div>
+          </div>
+          <div class="results-body" id="resultsBody">
+            <div class="empty-state">Run SQL or open a table to view rows.</div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="connectionDialog">
+      <form method="dialog" class="dialog-card" id="connectionForm">
+        <div class="dialog-header">
+          <div>
+            <h2 id="connectionDialogTitle">Connection</h2>
+            <p>PostgreSQL over direct TCP or SSH tunnel</p>
+          </div>
+          <button class="icon-button dialog-close" type="button" aria-label="Close">
+            <span data-icon="x"></span>
+          </button>
+        </div>
+
+        <div class="form-grid">
+          <label>
+            Name
+            <input id="connName" required placeholder="Production read replica" />
+          </label>
+          <label>
+            Tag
+            <input id="connTag" list="tagPresets" value="Development" placeholder="Development" />
+            <datalist id="tagPresets">
+              <option value="Local"></option>
+              <option value="Testing"></option>
+              <option value="Development"></option>
+              <option value="QA"></option>
+              <option value="Staging"></option>
+              <option value="Production"></option>
+            </datalist>
+          </label>
+          <label>
+            Tag color
+            <input id="connTagColor" type="color" value="#0f8f8c" />
+          </label>
+          <label>
+            Type
+            <select id="connType">
+              <option value="postgres">PostgreSQL</option>
+              <option value="mysql" disabled>MySQL - planned</option>
+              <option value="sqlite" disabled>SQLite - planned</option>
+            </select>
+          </label>
+          <label>
+            Host
+            <input id="connHost" required value="localhost" />
+          </label>
+          <label>
+            Port
+            <input id="connPort" type="number" required value="5432" min="1" max="65535" />
+          </label>
+          <label>
+            Database
+            <input id="connDatabase" required value="postgres" />
+          </label>
+          <label>
+            User
+            <input id="connUser" required value="postgres" />
+          </label>
+          <label>
+            Password
+            <input id="connPassword" type="password" autocomplete="off" />
+          </label>
+          <label class="check-row field-inline">
+            <input id="connSsl" type="checkbox" />
+            <span>Use SSL</span>
+          </label>
+        </div>
+
+        <label class="url-import">
+          Import URL
+          <div class="inline-action">
+            <input id="connUrl" placeholder="postgresql://user:pass@host:5432/db" />
+            <button class="tool-button" id="importUrlButton" type="button">
+              <span data-icon="download"></span>
+              Import
+            </button>
+          </div>
+        </label>
+
+        <details class="ssh-box">
+          <summary>
+            <span data-icon="terminal"></span>
+            SSH tunnel
+          </summary>
+          <label class="check-row">
+            <input id="sshEnabled" type="checkbox" />
+            <span>Connect through SSH</span>
+          </label>
+          <div class="form-grid">
+            <label>
+              SSH host
+              <input id="sshHost" />
+            </label>
+            <label>
+              SSH port
+              <input id="sshPort" type="number" value="22" min="1" max="65535" />
+            </label>
+            <label>
+              SSH user
+              <input id="sshUser" />
+            </label>
+            <label>
+              SSH password
+              <input id="sshPassword" type="password" autocomplete="off" />
+            </label>
+          </div>
+          <label>
+            Private key path
+            <div class="inline-action">
+              <input id="sshPrivateKeyPath" placeholder="~/.ssh/cheiron_dev_qa" />
+              <button class="tool-button" id="chooseSshKeyButton" type="button">
+                <span data-icon="folder"></span>
+                Choose
+              </button>
+              <input id="sshPrivateKeyFile" type="file" accept=".pem,.key,.txt,.pub,*/*" hidden />
+            </div>
+          </label>
+          <label>
+            Private key
+            <textarea id="sshPrivateKey" spellcheck="false" placeholder="Optional: paste key content instead of storing a local path"></textarea>
+          </label>
+          <label>
+            Key passphrase
+            <input id="sshPassphrase" type="password" autocomplete="off" />
+          </label>
+        </details>
+
+        <div class="dialog-actions">
+          <button class="tool-button" id="testConnectionButton" type="button">
+            <span data-icon="plug"></span>
+            Test
+          </button>
+          <span id="connectionFormStatus"></span>
+          <button class="primary-button" id="saveConnectionButton" type="submit">
+            <span data-icon="save"></span>
+            Save
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="databaseDialog">
+      <form method="dialog" class="dialog-card compact database-dialog-card" id="databaseForm">
+        <div class="dialog-header centered">
+          <div>
+            <h2>Open database</h2>
+            <p id="databaseDialogSubtitle">Choose a database for this connection.</p>
+          </div>
+          <button class="icon-button dialog-close" type="button" aria-label="Close">
+            <span data-icon="x"></span>
+          </button>
+        </div>
+        <div class="search-wrap database-search">
+          <span data-icon="search"></span>
+          <input id="databaseSearch" type="search" placeholder="Search for database..." />
+        </div>
+        <div class="database-list" id="databaseList"></div>
+        <div class="dialog-actions database-actions">
+          <button class="tool-button dialog-close" type="button">Cancel</button>
+          <button class="tool-button" id="newDatabaseButton" type="button">New...</button>
+          <button class="primary-button" id="openSelectedDatabaseButton" type="submit" disabled>Open</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="tableInfoDialog">
+      <form method="dialog" class="dialog-card ddl-dialog" id="tableInfoForm">
+        <div class="dialog-header">
+          <div>
+            <h2 id="tableInfoTitle">Table Info</h2>
+            <p id="tableInfoSubtitle">DDL SQL</p>
+          </div>
+          <button class="icon-button dialog-close" type="button" aria-label="Close">
+            <span data-icon="x"></span>
+          </button>
+        </div>
+        <textarea id="tableDdlViewer" spellcheck="false" readonly></textarea>
+        <div class="dialog-actions">
+          <button class="tool-button" id="copyTableDdlButton" type="button">
+            <span data-icon="copy"></span>
+            Copy
+          </button>
+          <button class="tool-button" id="downloadTableDdlButton" type="button">
+            <span data-icon="download"></span>
+            Download
+          </button>
+          <button class="primary-button dialog-close" type="button">
+            <span data-icon="check"></span>
+            Done
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="importDialog">
+      <form method="dialog" class="dialog-card compact" id="importForm">
+        <div class="dialog-header">
+          <div>
+            <h2>Import</h2>
+            <p id="importSubtitle">SQL files run in the editor; CSV/JSON imports into the selected table.</p>
+          </div>
+          <button class="icon-button dialog-close" type="button" aria-label="Close">
+            <span data-icon="x"></span>
+          </button>
+        </div>
+        <label>
+          Type
+          <select id="importType">
+            <option value="sql">SQL file</option>
+            <option value="csv">CSV into current table</option>
+            <option value="json">JSON into current table</option>
+          </select>
+        </label>
+        <label>
+          File
+          <input id="importFile" type="file" accept=".sql,.csv,.json,text/sql,text/csv,application/json" />
+        </label>
+        <div class="dialog-actions">
+          <span id="importStatus"></span>
+          <button class="primary-button" id="runImportButton" type="submit">
+            <span data-icon="upload"></span>
+            Import
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="typeDialog">
+      <form method="dialog" class="dialog-card compact" id="typeForm">
+        <div class="dialog-header">
+          <div>
+            <h2 id="typeDialogTitle">Custom Type</h2>
+            <p id="typeDialogSubtitle">Enum values</p>
+          </div>
+          <button class="icon-button dialog-close" type="button" aria-label="Close">
+            <span data-icon="x"></span>
+          </button>
+        </div>
+        <div class="enum-editor" id="enumEditor"></div>
+        <button class="tool-button" id="addEnumValueButton" type="button">
+          <span data-icon="plus"></span>
+          Add value
+        </button>
+        <div class="dialog-actions">
+          <span id="typeStatus"></span>
+          <button class="primary-button" id="saveTypeButton" type="submit">
+            <span data-icon="save"></span>
+            Save
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="deleteOptionsDialog">
+      <form method="dialog" class="dialog-card compact" id="deleteOptionsForm">
+        <div class="dialog-header">
+          <div>
+            <h2 id="deleteOptionsTitle">Delete</h2>
+            <p id="deleteOptionsSubtitle">Choose delete behavior.</p>
+          </div>
+          <button class="icon-button dialog-close" type="button" aria-label="Close">
+            <span data-icon="x"></span>
+          </button>
+        </div>
+        <label class="check-row">
+          <input id="deleteCascadeOption" type="checkbox" />
+          Delete cascade
+        </label>
+        <label class="check-row" id="deleteIgnoreFkLabel">
+          <input id="deleteIgnoreFkOption" type="checkbox" />
+          Ignore foreign-key checks
+        </label>
+        <p class="field-hint" id="deleteIgnoreFkHint"></p>
+        <div class="dialog-actions">
+          <button class="tool-button dialog-close" type="button">Cancel</button>
+          <button class="danger-button" id="confirmDeleteOptionsButton" type="submit">
+            <span data-icon="trash"></span>
+            Mark for Delete
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <div class="grid-context-menu" id="gridContextMenu" hidden></div>
+    <div class="schema-create-menu connection-menu" id="schemaCreateMenu" hidden>
+      <button type="button" data-action="table">New Table</button>
+      <button type="button" data-action="view">New View</button>
+      <button type="button" data-action="materialized-view">New Materialized View</button>
+      <button type="button" data-action="function">New Function/Procedure</button>
+      <button type="button" data-action="schema">New Schema...</button>
+      <div class="menu-separator"></div>
+      <button type="button" data-action="group">New Group...</button>
+    </div>
+    <div class="favorite-menu connection-menu" id="favoriteMenu" hidden>
+      <button type="button" data-action="rename">
+        Rename
+      </button>
+      <button type="button" data-action="copy">
+        <span data-icon="copy"></span>
+        Copy
+      </button>
+      <button type="button" data-action="remove">
+        <span data-icon="trash"></span>
+        Remove
+      </button>
+    </div>
+    <div class="sql-tab-menu connection-menu" id="sqlTabMenu" hidden>
+      <button type="button" data-action="rename">Rename</button>
+      <button type="button" data-action="favorite">Add Favorite</button>
+    </div>
+    <div class="sql-generation-menu connection-menu" id="sqlGenerationMenu" hidden>
+      <button type="button" id="toggleAiSchemaInfoButton" role="menuitemcheckbox" aria-checked="true">
+        <span class="menu-check-icon" data-icon="check"></span>
+        Send schema info
+      </button>
+      <button type="button" id="toggleAiReadOnlyButton" role="menuitemcheckbox" aria-checked="false">
+        <span class="menu-check-icon" data-icon="check"></span>
+        Read-only SQL only
+      </button>
+      <div class="menu-separator"></div>
+      <button type="button" id="openSqlGenerationSettingsButton">
+        <span data-icon="settings"></span>
+        Generation settings
+      </button>
+    </div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
