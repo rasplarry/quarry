@@ -30,9 +30,18 @@
               <h1>Quarry</h1>
               <p id="connectionState">No connection</p>
             </div>
-            <button class="icon-button" id="newConnectionButton" title="New connection" aria-label="New connection">
-              <span data-icon="plus"></span>
-            </button>
+            <div class="sidebar-actions">
+              <button class="icon-button" id="exportConnectionsButton" title="Export connections" aria-label="Export connections">
+                <span data-icon="download"></span>
+              </button>
+              <button class="icon-button" id="importConnectionsButton" title="Import .quarry connections" aria-label="Import .quarry connections">
+                <span data-icon="upload"></span>
+              </button>
+              <input id="connectionsImportFile" type="file" accept=".quarry,application/json" hidden />
+              <button class="icon-button" id="newConnectionButton" title="New connection" aria-label="New connection">
+                <span data-icon="plus"></span>
+              </button>
+            </div>
           </div>
 
           <div class="search-wrap">
@@ -252,16 +261,36 @@
           </div>
           <div class="filter-bar" id="filterBar" hidden>
             <div class="filter-list" id="filterList"></div>
-            <button class="tool-button" id="addFilterButton" type="button">
-              <span data-icon="plus"></span>
-            </button>
-            <button class="tool-button" id="removeFilterButton" type="button">
-              <span data-icon="x"></span>
-            </button>
-            <button class="primary-button" id="applyFiltersButton" type="button">
-              <span data-icon="check"></span>
-              Apply
-            </button>
+            <div class="filter-actions">
+              <div class="filter-apply-group">
+                <button class="primary-button" id="applyFiltersButton" type="button" title="Apply checked filters with AND (Cmd+Enter)">
+                  <span data-icon="check"></span>
+                  Apply All
+                </button>
+                <button class="tool-button filter-join-button" id="filterJoinMenuButton" type="button" title="Choose filter join mode" aria-label="Choose filter join mode">
+                  <span data-icon="chevronDown"></span>
+                </button>
+                <div class="filter-join-menu" id="filterJoinMenu" hidden>
+                  <button type="button" data-filter-join="and">
+                    <span>Apply All Checked Filters with AND - Default</span>
+                    <kbd>⌘↩</kbd>
+                  </button>
+                  <button type="button" data-filter-join="or">
+                    <span>Apply All Checked Filters with OR</span>
+                    <kbd>⇧⌘↩</kbd>
+                  </button>
+                </div>
+              </div>
+              <span class="filter-shortcuts">⌘↩ AND · ⇧⌘↩ OR</span>
+              <div class="filter-edit-actions">
+                <button class="tool-button" id="addFilterButton" type="button" title="Add filter" aria-label="Add filter">
+                  <span data-icon="plus"></span>
+                </button>
+                <button class="tool-button" id="removeFilterButton" type="button" title="Remove last filter" aria-label="Remove last filter">
+                  <span data-icon="minus"></span>
+                </button>
+              </div>
+            </div>
           </div>
           <div class="table-scroll">
             <div class="data-main">

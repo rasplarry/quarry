@@ -5,7 +5,8 @@ const storageKeys = {
   settings: "local-db-studio:settings",
   history: "local-db-studio:history",
   favorites: "local-db-studio:favorites",
-  favoriteFolders: "local-db-studio:favorite-folders"
+  favoriteFolders: "local-db-studio:favorite-folders",
+  tableFilters: "local-db-studio:table-filters"
 };
 
 const icons = {
@@ -13,6 +14,7 @@ const icons = {
   clock: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>',
   settings: '<svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"></path><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1A2 2 0 1 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3h.1a1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.6 1h.2a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1z"></path></svg>',
   plus: '<svg viewBox="0 0 24 24"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>',
+  minus: '<svg viewBox="0 0 24 24"><path d="M5 12h14"></path></svg>',
   search: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m16 16 4 4"></path></svg>',
   refresh: '<svg viewBox="0 0 24 24"><path d="M20 6v5h-5"></path><path d="M4 18v-5h5"></path><path d="M19 11a7 7 0 0 0-12-4l-3 3"></path><path d="M5 13a7 7 0 0 0 12 4l3-3"></path></svg>',
   filter: '<svg viewBox="0 0 24 24"><path d="M4 5h16"></path><path d="M7 12h10"></path><path d="M10 19h4"></path></svg>',
@@ -65,6 +67,7 @@ const sqlAutocompleteKeywords = [
 const pageSize = 300;
 const filterOperators = [
   ["=", "="],
+  ["!=", "!="],
   ["<>", "<>"],
   ["<", "<"],
   [">", ">"],
@@ -291,6 +294,7 @@ const state = {
   history: load(storageKeys.history, []),
   favorites: load(storageKeys.favorites, []),
   favoriteFolders: load(storageKeys.favoriteFolders, {}),
+  tableFilters: load(storageKeys.tableFilters, {}),
   sqlTabs: [
     defaultSqlTab()
   ],
@@ -308,6 +312,7 @@ const state = {
   currentOffset: 0,
   selectedRowIndex: null,
   filters: [],
+  filterJoin: "and",
   selectedRows: new Set(),
   selectedResultRows: new Set(),
   dragSelection: null,
@@ -547,6 +552,7 @@ function saveActiveConnectionTabState() {
   tab.currentOffset = state.currentOffset;
   tab.selectedRowIndex = state.selectedRowIndex;
   tab.filters = cloneFilters(state.filters);
+  tab.filterJoin = state.filterJoin;
   tab.tableTabs = state.tableTabs;
   tab.activeTableTabId = state.activeTableTabId;
   tab.pendingEdits = state.pendingEdits;
@@ -569,6 +575,7 @@ function clearConnectionWorkspace() {
   state.currentOffset = 0;
   state.selectedRowIndex = null;
   state.filters = [];
+  state.filterJoin = "and";
   state.tableTabs = [];
   state.activeTableTabId = null;
   state.pendingEdits = [];
@@ -598,6 +605,7 @@ function clearConnectionWorkspace() {
   renderSqlGenerationReview();
   updateFavoriteSqlButton();
   renderRowInspector(null);
+  syncFilterBarVisibility();
 }
 
 function getOrCreateConnectionTab(connectionId) {
@@ -618,6 +626,7 @@ function getOrCreateConnectionTab(connectionId) {
       currentOffset: 0,
       selectedRowIndex: null,
       filters: [],
+      filterJoin: "and",
       tableTabs: [],
       activeTableTabId: null,
       pendingEdits: [],
@@ -648,6 +657,7 @@ function restoreConnectionTab(tab) {
   state.currentOffset = tab.currentOffset || 0;
   state.selectedRowIndex = tab.selectedRowIndex ?? null;
   state.filters = cloneFilters(tab.filters || []);
+  state.filterJoin = normalizedFilterJoin(tab.filterJoin);
   state.tableTabs = tab.tableTabs || [];
   state.activeTableTabId = tab.activeTableTabId || null;
   state.pendingEdits = tab.pendingEdits || [];
@@ -1083,6 +1093,7 @@ function resetActiveDatabaseWorkspace() {
   state.currentOffset = 0;
   state.selectedRowIndex = null;
   state.filters = [];
+  state.filterJoin = "and";
   state.tableTabs = [];
   state.activeTableTabId = null;
   state.pendingEdits = [];
@@ -1102,6 +1113,7 @@ function resetActiveDatabaseWorkspace() {
     tab.currentOffset = 0;
     tab.selectedRowIndex = null;
     tab.filters = [];
+    tab.filterJoin = "and";
     tab.tableTabs = [];
     tab.activeTableTabId = null;
     tab.pendingEdits = [];
@@ -1115,6 +1127,7 @@ function resetActiveDatabaseWorkspace() {
   renderDataGrid(null);
   renderStructure();
   renderResults();
+  syncFilterBarVisibility();
   showSqlMode();
 }
 
@@ -1670,8 +1683,11 @@ async function openForeignKeyTab(fk, row) {
   }
   const tab = getOrCreateTableTab(fk.foreign_schema, fk.foreign_table);
   tab.filters = filters;
+  tab.filterJoin = "and";
   tab.gridSearch = "";
   state.filters = cloneFilters(filters);
+  state.filterJoin = "and";
+  persistTableFilterState(fk.foreign_schema, fk.foreign_table, tab.filters, tab.filterJoin);
   addHistoryEntry("fk", `Follow FK to ${fk.foreign_schema}.${fk.foreign_table}`);
   toggleFilterBar(true);
   await openTable(fk.foreign_schema, fk.foreign_table, 0, { force: true });
@@ -1679,6 +1695,41 @@ async function openForeignKeyTab(fk, row) {
 
 function cloneFilters(filters = []) {
   return filters.map((filter) => ({ ...filter }));
+}
+
+function normalizedFilterJoin(value) {
+  return String(value || "").toLowerCase() === "or" ? "or" : "and";
+}
+
+function tableFilterStorageKey(schema, table, connection = activeConnection()) {
+  if (!connection || !schema || !table) return "";
+  return JSON.stringify([connection.id, connection.database || "", schema, table]);
+}
+
+function savedTableFilterState(schema, table) {
+  const key = tableFilterStorageKey(schema, table);
+  const saved = key ? state.tableFilters[key] : null;
+  return {
+    filters: cloneFilters(saved?.filters || []),
+    filterJoin: normalizedFilterJoin(saved?.filterJoin)
+  };
+}
+
+function persistTableFilterState(schema, table, filters = state.filters, filterJoin = state.filterJoin) {
+  const key = tableFilterStorageKey(schema, table);
+  if (!key) return;
+  const nextFilters = cloneFilters(filters).filter((filter) => (
+    filter.column || filter.value || filter.value2
+  ));
+  if (nextFilters.length === 0) {
+    delete state.tableFilters[key];
+  } else {
+    state.tableFilters[key] = {
+      filters: nextFilters,
+      filterJoin: normalizedFilterJoin(filterJoin)
+    };
+  }
+  save(storageKeys.tableFilters, state.tableFilters);
 }
 
 function activeTableTab() {
@@ -1689,6 +1740,7 @@ function getOrCreateTableTab(schema, table) {
   const id = tableKey(schema, table);
   let tab = state.tableTabs.find((item) => item.id === id);
   if (!tab) {
+    const savedFilters = savedTableFilterState(schema, table);
     tab = {
       id,
       schema,
@@ -1696,7 +1748,8 @@ function getOrCreateTableTab(schema, table) {
       title: `${schema}.${table}`,
       result: null,
       tableInfo: state.catalog?.tables?.[id] || null,
-      filters: [],
+      filters: savedFilters.filters,
+      filterJoin: savedFilters.filterJoin,
       sort: null,
       gridSearch: "",
       selectedRowIndex: null,
@@ -1713,10 +1766,12 @@ function saveActiveTabState() {
   tab.result = state.currentTable;
   tab.tableInfo = state.currentTableInfo;
   tab.filters = cloneFilters(state.filters);
+  tab.filterJoin = normalizedFilterJoin(state.filterJoin);
   tab.sort = state.currentTable?.sort || tab.sort || null;
   tab.gridSearch = $("#gridSearch")?.value || "";
   tab.selectedRowIndex = state.selectedRowIndex;
   tab.pendingEdits = [...state.pendingEdits];
+  persistTableFilterState(tab.schema, tab.table, tab.filters, tab.filterJoin);
 }
 
 function quoteIdentJs(value) {
@@ -1777,7 +1832,13 @@ function filterToSql(filter) {
 }
 
 function tableQueryPreview(schema, table, offset, tab = activeTableTab()) {
-  const where = (tab?.filters || []).map(filterToSql).filter(Boolean).join(" AND ");
+  const joinMode = normalizedFilterJoin(tab?.filterJoin || state.filterJoin);
+  const joiner = joinMode === "or" ? " OR " : " AND ";
+  const where = (tab?.filters || [])
+    .map(filterToSql)
+    .filter(Boolean)
+    .map((clause) => `(${clause})`)
+    .join(joiner);
   const sort = tab?.sort?.column
     ? ` ORDER BY ${quoteIdentJs(tab.sort.column)} ${String(tab.sort.direction).toUpperCase()} NULLS LAST`
     : "";
@@ -1933,6 +1994,8 @@ function closeTableTab(id) {
       state.currentTableInfo = null;
       state.pendingEdits = [];
       state.filters = [];
+      state.filterJoin = "and";
+      syncFilterBarVisibility();
       $("#dataGrid").innerHTML = "";
       $("#tableTitle").textContent = "No table selected";
       $("#tableSubtitle").textContent = "";
@@ -1962,6 +2025,7 @@ function activateTableTab(id) {
   state.currentOffset = tab.result?.offset || 0;
   state.selectedRowIndex = tab.selectedRowIndex;
   state.filters = cloneFilters(tab.filters);
+  state.filterJoin = normalizedFilterJoin(tab.filterJoin);
   state.pendingEdits = [...(tab.pendingEdits || [])];
   $("#gridSearch").value = tab.gridSearch || "";
   $("#tableInfoButton").disabled = !state.currentTableInfo;
@@ -1972,7 +2036,7 @@ function activateTableTab(id) {
   showDataMode();
   renderDataGrid(state.currentTable, true);
   renderStructure(state.currentTableInfo);
-  if (!$("#filterBar").hidden) renderFilters();
+  syncFilterBarVisibility();
   updateApplySelectedState();
   saveActiveConnectionTabState();
 }
@@ -2064,6 +2128,10 @@ function renderConnections() {
             <span data-icon="copy"></span>
             Duplicate
           </button>
+          <button type="button" data-action="export">
+            <span data-icon="download"></span>
+            Export
+          </button>
           <button type="button" data-action="delete">
             <span data-icon="trash"></span>
             Delete
@@ -2134,6 +2202,7 @@ function renderConnections() {
       state.openConnectionMenuId = null;
       if (action === "settings") openConnectionDialog(connection);
       if (action === "duplicate") duplicateConnection(connection);
+      if (action === "export") exportSingleConnection(connection);
       if (action === "delete") deleteConnection(connection);
     });
     list.append(button);
@@ -2781,6 +2850,119 @@ function duplicateConnection(connection) {
   showToast(`Duplicated ${connection.name}.`);
 }
 
+function sanitizeConnectionForExport(connection) {
+  const copy = typeof structuredClone === "function"
+    ? structuredClone(connection)
+    : JSON.parse(JSON.stringify(connection));
+  copy.ssh = {
+    ...(copy.ssh || {}),
+    privateKey: ""
+  };
+  return copy;
+}
+
+function exportConnections(connections = state.connections, filename = "quarry_connections.quarry") {
+  if (!connections.length) {
+    showToast("No connections to export.", "error");
+    return;
+  }
+  const payload = {
+    type: "quarry.connections",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    tagColors: state.settings.tagColors || {},
+    connections: connections.map(sanitizeConnectionForExport)
+  };
+  downloadText(filename, JSON.stringify(payload, null, 2), "application/quarry+json;charset=utf-8");
+  showToast(`Exported ${connections.length} connection${connections.length === 1 ? "" : "s"}.`);
+}
+
+function exportAllConnections() {
+  const stamp = new Date().toISOString().slice(0, 10);
+  exportConnections(state.connections, `quarry_connections_${stamp}.quarry`);
+}
+
+function exportSingleConnection(connection) {
+  exportConnections([connection], `${safeFileName(connection.name || "connection")}.quarry`);
+}
+
+function importedConnectionFromRaw(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const ssh = raw.ssh && typeof raw.ssh === "object" ? raw.ssh : {};
+  return {
+    id: String(raw.id || uid()),
+    name: String(raw.name || raw.host || "Imported connection").trim() || "Imported connection",
+    tag: normalizeTag(raw.tag),
+    tagColor: normalizeHexColor(raw.tagColor) || tagColor(raw.tag),
+    type: raw.type === "postgres" ? "postgres" : "postgres",
+    host: String(raw.host || "localhost").trim(),
+    port: Number(raw.port || 5432),
+    database: String(raw.database || "postgres").trim(),
+    user: String(raw.user || "postgres").trim(),
+    password: String(raw.password || ""),
+    ssl: Boolean(raw.ssl),
+    ssh: {
+      enabled: Boolean(ssh.enabled),
+      host: String(ssh.host || "").trim(),
+      port: Number(ssh.port || 22),
+      username: String(ssh.username || "").trim(),
+      password: String(ssh.password || ""),
+      privateKeyPath: String(ssh.privateKeyPath || "").trim(),
+      privateKey: "",
+      passphrase: String(ssh.passphrase || "")
+    }
+  };
+}
+
+async function importConnectionsFile(event) {
+  const input = event.currentTarget;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+
+  try {
+    const payload = JSON.parse(await file.text());
+    const rawConnections = Array.isArray(payload) ? payload : payload?.connections;
+    if (!Array.isArray(rawConnections)) {
+      throw new Error("Invalid .quarry file.");
+    }
+
+    for (const [key, record] of Object.entries(payload?.tagColors || {})) {
+      if (typeof record === "string") {
+        rememberTagColor(key, record);
+      } else if (record?.tag && record?.color) {
+        rememberTagColor(record.tag, record.color);
+      }
+    }
+
+    const imported = rawConnections.map(importedConnectionFromRaw).filter(Boolean);
+    if (imported.length === 0) throw new Error("No connections found in this file.");
+
+    let added = 0;
+    let updated = 0;
+    for (const connection of imported) {
+      applySharedTagColor(connection);
+      const index = state.connections.findIndex((item) => item.id === connection.id);
+      if (index >= 0) {
+        state.connections.splice(index, 1, connection);
+        updated += 1;
+      } else {
+        state.connections.push(connection);
+        added += 1;
+      }
+      const tab = state.connectionTabs.find((item) => item.connectionId === connection.id);
+      if (tab) tab.title = connection.name;
+    }
+    save(storageKeys.connections, state.connections);
+    renderTagDatalist();
+    renderConnections();
+    renderConnectionTabs();
+    showToast(`Imported ${added} new, updated ${updated}.`);
+  } catch (error) {
+    showToast(error.message || "Import failed.", "error");
+  }
+}
+
 function deleteConnection(connection) {
   if (!confirm(`Delete connection "${connection.name}"?`)) return;
   const wasActive = state.activeConnectionId === connection.id;
@@ -3101,6 +3283,7 @@ async function openTable(schema, table, offset = 0, options = {}) {
   if (!preserveRows) state.selectedRowIndex = null;
   state.selectedRows = new Set();
   state.filters = cloneFilters(tab.filters);
+  state.filterJoin = normalizedFilterJoin(tab.filterJoin);
   if (!preserveRows) state.pendingEdits = [];
   $("#gridSearch").value = tab.gridSearch || "";
   if (!preserveRows) {
@@ -3150,6 +3333,7 @@ async function openTable(schema, table, offset = 0, options = {}) {
       limit: pageSize,
       offset,
       filters: tab.filters,
+      filterJoin: tab.filterJoin,
       sort: tab.sort,
       primaryKey: tab.tableInfo?.primaryKey || state.currentTableInfo?.primaryKey || []
     });
@@ -3162,6 +3346,7 @@ async function openTable(schema, table, offset = 0, options = {}) {
     tab.result = state.currentTable;
     tab.tableInfo = state.currentTableInfo;
     tab.filters = cloneFilters(state.filters);
+    tab.filterJoin = normalizedFilterJoin(state.filterJoin);
     tab.gridSearch = $("#gridSearch").value || "";
     tab.selectedRowIndex = null;
     tab.pendingEdits = [];
@@ -3172,7 +3357,7 @@ async function openTable(schema, table, offset = 0, options = {}) {
     renderDataTabs();
     renderDataGrid(tableResponse.data, true);
     renderStructure(state.currentTableInfo);
-    if (!$("#filterBar").hidden) renderFilters();
+    syncFilterBarVisibility();
     const querySql = tableQueryPreview(schema, table, offset, tab);
     $("#dataElapsed").textContent = formatDuration(tableResponse.data.elapsedMs);
     appendQueryMessage({
@@ -3189,6 +3374,7 @@ async function openTable(schema, table, offset = 0, options = {}) {
         schema,
         table,
         filters: cloneFilters(tab.filters),
+        filterJoin: tab.filterJoin,
         sort: tab.sort || null
       });
     }
@@ -3220,6 +3406,7 @@ async function refreshCurrentDataTable() {
     table: state.currentTable.table,
     offset: state.currentOffset,
     filters: cloneFilters(tab.filters),
+    filterJoin: tab.filterJoin,
     sort: tab.sort || null
   });
   await openTable(
@@ -3949,10 +4136,14 @@ function renderRowInspector(row, rowIndex = null) {
   }
 }
 
+function filterNeedsSecondValue(operator) {
+  return ["BETWEEN", "NOT BETWEEN"].includes(String(operator || "").toUpperCase());
+}
+
 function renderFilters() {
   const list = $("#filterList");
   list.innerHTML = "";
-  if (state.filters.length === 0) state.filters.push({ enabled: true, column: "", operator: "=", value: "", value2: "" });
+  renderFilterControls();
   const columns = state.currentTable?.fields?.map((field) => field.name) || [];
   state.filters.forEach((filter, index) => {
     const row = document.createElement("div");
@@ -3964,6 +4155,7 @@ function renderFilters() {
     enabled.addEventListener("change", () => {
       filter.enabled = enabled.checked;
       saveActiveTabState();
+      renderFilterControls();
     });
 
     const column = document.createElement("select");
@@ -3980,10 +4172,6 @@ function renderFilters() {
     const operator = document.createElement("select");
     operator.innerHTML = filterOperators.map(([label, value]) => `<option value="${value}">${label}</option>`).join("");
     operator.value = filter.operator || "=";
-    operator.addEventListener("change", () => {
-      filter.operator = operator.value;
-      saveActiveTabState();
-    });
 
     const value = document.createElement("input");
     value.placeholder = "Value";
@@ -4001,40 +4189,128 @@ function renderFilters() {
       saveActiveTabState();
     });
 
-    const apply = document.createElement("button");
-    apply.type = "button";
-    apply.className = "tool-button";
-    apply.textContent = "Apply";
-    apply.addEventListener("click", () => applyFilters());
+    const syncSecondValue = () => {
+      const needsSecondValue = filterNeedsSecondValue(filter.operator);
+      row.classList.toggle("has-second-value", needsSecondValue);
+      value.placeholder = needsSecondValue ? "Value 1" : "Value";
+      value2.hidden = !needsSecondValue;
+      value2.disabled = !needsSecondValue;
+    };
 
-    row.append(enabled, column, operator, value, value2, apply);
+    operator.addEventListener("change", () => {
+      filter.operator = operator.value;
+      if (!filterNeedsSecondValue(filter.operator)) {
+        filter.value2 = "";
+        value2.value = "";
+      }
+      syncSecondValue();
+      saveActiveTabState();
+    });
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "tool-button filter-row-remove";
+    remove.title = "Remove filter";
+    remove.setAttribute("aria-label", "Remove filter");
+    remove.innerHTML = '<span data-icon="minus"></span>';
+    remove.addEventListener("click", () => removeFilterAt(index));
+
+    row.append(enabled, column, operator, value, value2, remove);
+    syncSecondValue();
     list.append(row);
+  });
+  installIcons();
+}
+
+function renderFilterControls() {
+  const join = normalizedFilterJoin(state.filterJoin);
+  const applyButton = $("#applyFiltersButton");
+  const menu = $("#filterJoinMenu");
+  const checkedCount = state.filters.filter((filter) => filter.enabled !== false).length;
+  if (applyButton) {
+    applyButton.disabled = state.filters.length === 0;
+    applyButton.title = `Apply ${checkedCount} checked filter${checkedCount === 1 ? "" : "s"} with AND (Cmd+Enter)`;
+  }
+  menu?.querySelectorAll("[data-filter-join]").forEach((button) => {
+    const active = button.dataset.filterJoin === join;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-checked", String(active));
   });
 }
 
-function toggleFilterBar(force) {
+function syncFilterBarVisibility() {
   const bar = $("#filterBar");
-  bar.hidden = typeof force === "boolean" ? !force : !bar.hidden;
+  if (!bar) return;
+  bar.hidden = state.filters.length === 0;
   if (!bar.hidden) renderFilters();
+  closeFilterJoinMenu();
+}
+
+function toggleFilterBar(force, options = {}) {
+  const bar = $("#filterBar");
+  const shouldShow = typeof force === "boolean" ? force : bar.hidden;
+  if (!shouldShow) {
+    bar.hidden = true;
+    closeFilterJoinMenu();
+    return;
+  }
+  if (shouldShow && options.ensureRow && state.filters.length === 0) {
+    state.filters.push({ enabled: true, column: "", operator: "=", value: "", value2: "" });
+    saveActiveTabState();
+  }
+  syncFilterBarVisibility();
 }
 
 function addFilter() {
   state.filters.push({ enabled: true, column: "", operator: "=", value: "", value2: "" });
+  $("#filterBar").hidden = false;
   saveActiveTabState();
   renderFilters();
+}
+
+async function removeFilterAt(index = state.filters.length - 1) {
+  if (index < 0 || index >= state.filters.length) return;
+  state.filters.splice(index, 1);
+  saveActiveTabState();
+  syncFilterBarVisibility();
+  if (state.filters.length === 0 && state.currentTable) {
+    await openTable(state.currentTable.schema, state.currentTable.table, 0, { force: true });
+  }
 }
 
 function removeFilter() {
-  state.filters.pop();
-  saveActiveTabState();
-  renderFilters();
+  removeFilterAt(state.filters.length - 1);
 }
 
-async function applyFilters() {
+function closeFilterJoinMenu() {
+  const menu = $("#filterJoinMenu");
+  if (menu) menu.hidden = true;
+}
+
+function openFilterJoinMenu() {
+  const menu = $("#filterJoinMenu");
+  if (!menu) return;
+  renderFilterControls();
+  menu.hidden = !menu.hidden;
+}
+
+function setFilterJoin(join) {
+  state.filterJoin = normalizedFilterJoin(join);
+  const tab = activeTableTab();
+  if (tab) tab.filterJoin = state.filterJoin;
+  saveActiveTabState();
+  renderFilterControls();
+}
+
+async function applyFilters(join = state.filterJoin) {
   if (!state.currentTable) return;
+  setFilterJoin(join);
+  closeFilterJoinMenu();
   saveActiveTabState();
   addHistoryEntry("filter", `Filter ${state.currentTable.schema}.${state.currentTable.table}`, {
-    sql: tableQueryPreview(state.currentTable.schema, state.currentTable.table, 0, activeTableTab())
+    sql: tableQueryPreview(state.currentTable.schema, state.currentTable.table, 0, activeTableTab()),
+    filters: cloneFilters(state.filters),
+    filterJoin: state.filterJoin
   });
   await openTable(state.currentTable.schema, state.currentTable.table, 0, { force: true });
 }
@@ -4892,7 +5168,7 @@ function selectedSqlStatement() {
 }
 
 const sqlIdentifierPart = String.raw`(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*)(?:\.(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*))?`;
-const sqlWordOperators = ["=", "<>", "<", ">", "<=", ">=", "IS", "IS NOT", "IN", "NOT IN", "LIKE", "ILIKE", "BETWEEN", "NOT BETWEEN"];
+const sqlWordOperators = ["=", "!=", "<>", "<", ">", "<=", ">=", "IS", "IS NOT", "IN", "NOT IN", "LIKE", "ILIKE", "BETWEEN", "NOT BETWEEN"];
 const sqlStatementKeywords = [
   "SELECT", "WITH", "INSERT INTO", "UPDATE", "DELETE FROM", "ALTER TABLE", "ALTER TYPE",
   "CREATE TABLE", "DROP TABLE", "CREATE INDEX", "DROP INDEX"
@@ -6150,6 +6426,9 @@ function bindEvents() {
     button.addEventListener("click", () => setView(button.dataset.view));
   });
   $("#newConnectionButton").addEventListener("click", () => openConnectionDialog());
+  $("#exportConnectionsButton").addEventListener("click", exportAllConnections);
+  $("#importConnectionsButton").addEventListener("click", () => $("#connectionsImportFile").click());
+  $("#connectionsImportFile").addEventListener("change", importConnectionsFile);
   $("#connectionSearch").addEventListener("input", renderConnections);
   $("#objectSearch").addEventListener("input", renderSchema);
   $("#favoriteSearch").addEventListener("input", renderFavorites);
@@ -6193,7 +6472,12 @@ function bindEvents() {
   $("#nextPageButton").addEventListener("click", () => loadTablePage("next"));
   $("#addFilterButton").addEventListener("click", addFilter);
   $("#removeFilterButton").addEventListener("click", removeFilter);
-  $("#applyFiltersButton").addEventListener("click", applyFilters);
+  $("#applyFiltersButton").addEventListener("click", () => applyFilters("and"));
+  $("#filterJoinMenuButton").addEventListener("click", openFilterJoinMenu);
+  $("#filterJoinMenu").addEventListener("click", (event) => {
+    const join = event.target.closest("button")?.dataset.filterJoin;
+    if (join) applyFilters(join);
+  });
   $("#tableInfoButton").addEventListener("click", openTableInfo);
   $("#structureInfoButton").addEventListener("click", openTableInfo);
   $("#saveStructureButton").addEventListener("click", saveStructureChanges);
@@ -6390,7 +6674,12 @@ function bindEvents() {
     }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f" && !$("#dataPane").hidden) {
       event.preventDefault();
-      toggleFilterBar(true);
+      toggleFilterBar(true, { ensureRow: true });
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !$("#dataPane").hidden && !$("#filterBar").hidden) {
+      event.preventDefault();
+      applyFilters(event.shiftKey ? "or" : "and");
+      return;
     }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "r" && !$("#dataPane").hidden) {
       event.preventDefault();
@@ -6422,6 +6711,7 @@ function bindEvents() {
 	  window.desktopApi?.onNewTabShortcut?.(() => createFocusedTab());
   document.addEventListener("pointerdown", (event) => {
     if (!event.target.closest("#gridContextMenu")) closeGridContextMenu();
+    if (!event.target.closest("#filterJoinMenu") && !event.target.closest("#filterJoinMenuButton")) closeFilterJoinMenu();
     if (!event.target.closest("#sqlGenerationMenu") && !event.target.closest("#magicButton")) closeSqlGenerationMenu();
     if (!event.target.closest("#favoriteMenu") && !event.target.closest(".favorite-menu-button")) closeFavoriteMenu();
     if (!event.target.closest("#sqlTabMenu") && !event.target.closest(".sql-tab")) closeSqlTabMenu();

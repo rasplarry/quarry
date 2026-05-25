@@ -949,9 +949,14 @@ async function loadSchema(config) {
   });
 }
 
-function buildFilterWhere(filters = [], values = []) {
+function normalizedFilterJoin(value = "and") {
+  return String(value).toLowerCase() === "or" ? "or" : "and";
+}
+
+function buildFilterWhere(filters = [], values = [], filterJoin = "and") {
   if (!Array.isArray(filters) || filters.length === 0) return "";
   const clauses = [];
+  const joiner = normalizedFilterJoin(filterJoin) === "or" ? " or " : " and ";
   const opMap = {
     "=": "=",
     "!=": "<>",
@@ -1014,7 +1019,7 @@ function buildFilterWhere(filters = [], values = []) {
     }
   }
 
-  return clauses.length ? `where ${clauses.join(" and ")}` : "";
+  return clauses.length ? `where ${clauses.map((clause) => `(${clause})`).join(joiner)}` : "";
 }
 
 function buildSortOrder(sort = {}) {
@@ -1023,14 +1028,14 @@ function buildSortOrder(sort = {}) {
   return `order by ${quoteIdent(sort.column)} ${direction} nulls last`;
 }
 
-async function loadTableData(config, schema, table, limit = 300, offset = 0, filters = [], sort = {}, knownPrimaryKey = []) {
+async function loadTableData(config, schema, table, limit = 300, offset = 0, filters = [], filterJoin = "and", sort = {}, knownPrimaryKey = []) {
   const startedAt = performance.now();
   const safeLimit = Math.min(Math.max(Number(limit) || 300, 1), 1000);
   const safeOffset = Math.max(Number(offset) || 0, 0);
   return withPg(config, async (client) => {
     const tableSql = `${quoteIdent(schema)}.${quoteIdent(table)}`;
     const values = [];
-    const whereSql = buildFilterWhere(filters, values);
+    const whereSql = buildFilterWhere(filters, values, filterJoin);
     const orderSql = buildSortOrder(sort);
     values.push(safeLimit + 1, safeOffset);
     const sql = `select * from ${tableSql} ${whereSql} ${orderSql} limit $${values.length - 1} offset $${values.length}`;
@@ -1767,6 +1772,7 @@ async function routeApi(req, res, pathname) {
           body.limit,
           body.offset,
           body.filters,
+          body.filterJoin,
           body.sort,
           body.primaryKey
         )
