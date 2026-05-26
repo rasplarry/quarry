@@ -308,11 +308,11 @@ button {
   flex: 0 0 auto;
   max-width: 240px;
   align-items: center;
-  gap: 7px;
-  height: 24px;
-  padding: 0 7px 0 9px;
+  gap: 8px;
+  min-height: 32px;
+  padding: 4px 8px;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 8px;
   background: #f8faf7;
   color: var(--muted);
   font-size: 12px;
@@ -331,10 +331,10 @@ button {
   white-space: nowrap;
 }
 
-.connection-tab-tag {
-  height: 16px;
-  padding: 0 5px;
-  font-size: 9px;
+.connection-tab .connection-tab-tag {
+  height: 22px;
+  padding: 0 10px;
+  font-size: 11px;
 }
 
 .connection-tab-close {
@@ -359,6 +359,7 @@ button {
   color: var(--text);
   background: transparent;
   text-align: left;
+  transition: background 160ms ease, color 160ms ease;
 }
 
 .connection-item:hover,
@@ -395,6 +396,17 @@ button {
   background: rgba(15, 143, 140, 0.1);
 }
 
+.connection-item.selected-for-export {
+  background: #eef7f6;
+}
+
+.connection-select-checkbox {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 .connection-item strong,
 .history-item strong,
 .favorite-item strong {
@@ -414,6 +426,35 @@ button {
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.connection-item .connection-select-slot {
+  display: inline-flex;
+  width: 0;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transform: scale(0.78);
+  transition: width 180ms ease, opacity 180ms ease, transform 180ms ease;
+}
+
+.connection-item.selecting .connection-select-slot {
+  width: 20px;
+  opacity: 1;
+  transform: scale(1);
+  animation: connection-select-in 180ms ease both;
+}
+
+@keyframes connection-select-in {
+  from {
+    opacity: 0;
+    transform: scale(0.78);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .connection-item .grow,
@@ -775,6 +816,22 @@ button {
 
 .toolbar-actions::-webkit-scrollbar {
   display: none;
+}
+
+.schema-download-button {
+  border-style: dashed;
+  border-color: rgba(15, 143, 140, 0.4);
+  background: #f6fbf9;
+  color: var(--accent-strong);
+}
+
+.schema-download-button:hover {
+  background: var(--accent-soft);
+}
+
+.import-run-button {
+  border-color: #bfc8bf;
+  background: #ffffff;
 }
 
 .button-label {
@@ -2306,6 +2363,10 @@ textarea {
   font-weight: 500;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 .check-row input {
   width: 15px;
   height: 15px;
@@ -2319,6 +2380,11 @@ textarea {
   margin: -4px 0 0;
   color: var(--muted);
   font-size: 12px;
+}
+
+.input-error {
+  border-color: #d2463f !important;
+  box-shadow: 0 0 0 3px rgba(210, 70, 63, 0.16) !important;
 }
 
 #testConnectionButton.test-success {
@@ -2339,7 +2405,8 @@ textarea {
 }
 
 dialog {
-  width: min(760px, calc(100vw - 36px));
+  width: auto;
+  max-width: calc(100vw - 36px);
   max-height: calc(100vh - 32px);
   padding: 0;
   border: 0;
@@ -2352,6 +2419,25 @@ dialog::backdrop {
   background: rgba(23, 27, 24, 0.34);
 }
 
+#connectionDialog {
+  width: min(760px, calc(100vw - 36px));
+}
+
+#databaseDialog {
+  width: min(800px, calc(100vw - 28px));
+}
+
+#tableInfoDialog {
+  width: min(960px, calc(100vw - 32px));
+}
+
+#importDialog,
+#typeDialog,
+#deleteOptionsDialog,
+#connectionPasswordDialog {
+  width: min(520px, calc(100vw - 36px));
+}
+
 .dialog-card {
   padding: 18px;
   box-sizing: border-box;
@@ -2359,22 +2445,6 @@ dialog::backdrop {
   max-height: calc(100vh - 32px);
   overflow: auto;
   background: var(--panel);
-}
-
-.dialog-card.compact {
-  width: min(520px, calc(100vw - 36px));
-}
-
-#tableInfoDialog .dialog-card.compact {
-  width: min(620px, calc(100vw - 36px));
-}
-
-.ddl-dialog {
-  width: 100%;
-}
-
-#tableInfoDialog {
-  width: min(960px, calc(100vw - 32px));
 }
 
 #tableInfoDialog .ddl-dialog {

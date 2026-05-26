@@ -1037,12 +1037,12 @@ async function loadTableData(config, schema, table, limit = 300, offset = 0, fil
     const values = [];
     const whereSql = buildFilterWhere(filters, values, filterJoin);
     const orderSql = buildSortOrder(sort);
+    const countValues = [...values];
+    const countSql = `select count(*)::bigint as count from ${tableSql} ${whereSql}`;
     values.push(safeLimit + 1, safeOffset);
     const sql = `select * from ${tableSql} ${whereSql} ${orderSql} limit $${values.length - 1} offset $${values.length}`;
-    const dataResult = await client.query(
-      sql,
-      values
-    );
+    const dataResult = await client.query(sql, values);
+    const countResult = await client.query(countSql, countValues);
     let primaryKey = Array.isArray(knownPrimaryKey) ? knownPrimaryKey.filter(Boolean) : [];
     if (primaryKey.length === 0) {
       const pkResult = await client.query(
@@ -1072,6 +1072,7 @@ async function loadTableData(config, schema, table, limit = 300, offset = 0, fil
       elapsedMs: Math.round(performance.now() - startedAt),
       limit: safeLimit,
       offset: safeOffset,
+      totalRows: Number(countResult.rows[0]?.count || 0),
       hasMore: dataResult.rows.length > safeLimit,
       primaryKey
     };
@@ -1461,6 +1462,20 @@ async function runQuery(config, sql) {
   });
 }
 
+async function exportTableData(config, schema, table) {
+  const startedAt = performance.now();
+  return withPg(config, async (client) => {
+    const tableSql = qualifiedName(schema, table);
+    const sql = `select * from ${tableSql};`;
+    const result = await client.query(sql);
+    return {
+      ...resultToPayload(result),
+      sql,
+      elapsedMs: Math.round(performance.now() - startedAt)
+    };
+  });
+}
+
 async function commitTableEdits(config, schema, table, primaryKey, changes = []) {
   if (!Array.isArray(primaryKey) || primaryKey.length === 0) {
     throw new Error("A primary key is required for inline edits.");
@@ -1716,7 +1731,7 @@ async function generateSql({ apiKey, model, systemPrompt, prompt, dialect, schem
         priorSuggestions.length ? `Previous generated candidates not accepted:\n${priorSuggestions.map((sql, index) => `Candidate ${index + 1}:\n${sql}`).join("\n\n")}` : "",
         `User request:\n${prompt}`
       ].filter(Boolean).join("\n\n"),
-      max_output_tokens: 3200
+      max_output_tokens: 100000
     })
   });
 
@@ -1797,6 +1812,13 @@ async function routeApi(req, res, pathname) {
       sendJson(res, 200, {
         ok: true,
         sql: await exportDatabaseDdl(body.config)
+      });
+      return;
+    }
+    if (pathname === "/api/export-table-data") {
+      sendJson(res, 200, {
+        ok: true,
+        data: await exportTableData(body.config, body.schema, body.table)
       });
       return;
     }

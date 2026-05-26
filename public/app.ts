@@ -323,6 +323,8 @@ const state = {
   rowInspectorTimer: null,
   openConnectionMenuId: null,
   connectionMenuPosition: null,
+  connectionSelectionMode: false,
+  selectedConnectionIds: new Set(),
   queryMessages: [],
   draggedConnectionId: null,
   databaseDialog: { items: [], selected: "", loading: false },
@@ -345,6 +347,8 @@ const state = {
 };
 
 const connectionTimeoutMs = 30000;
+let connectionPasswordResolver = null;
+let encryptedConnectionImportPayload = null;
 
 function load(key, fallback) {
   try {
@@ -1249,6 +1253,12 @@ function formatDuration(ms) {
   return `${Math.round(Number(ms)).toLocaleString()} ms`;
 }
 
+function formatRowNumber(value) {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return String(value ?? 0);
+  return Math.max(0, numberValue).toLocaleString();
+}
+
 function formatLogTime(value) {
   const date = new Date(value || Date.now());
   return date.toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -1282,6 +1292,83 @@ function downloadText(filename, textValue, mimeType) {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(value) {
+  const binary = atob(String(value || ""));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+async function deriveQuarryEncryptionKey(password, salt) {
+  const passwordKey = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    "PBKDF2",
+    false,
+    ["deriveKey"]
+  );
+  return crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      salt,
+      iterations: 250000,
+      hash: "SHA-256"
+    },
+    passwordKey,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+
+async function encryptQuarryPayload(payload, password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveQuarryEncryptionKey(password, salt);
+  const plaintext = new TextEncoder().encode(JSON.stringify(payload));
+  const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
+  return {
+    type: "quarry.connections.encrypted",
+    version: 1,
+    crypto: {
+      algorithm: "AES-GCM",
+      kdf: "PBKDF2-SHA-256",
+      iterations: 250000,
+      salt: bytesToBase64(salt),
+      iv: bytesToBase64(iv)
+    },
+    ciphertext: bytesToBase64(new Uint8Array(encrypted))
+  };
+}
+
+async function decryptQuarryPayload(payload, password) {
+  const cryptoInfo = payload?.crypto || {};
+  if (cryptoInfo.algorithm !== "AES-GCM" || cryptoInfo.kdf !== "PBKDF2-SHA-256") {
+    throw new Error("Unsupported .quarry encryption.");
+  }
+  const salt = base64ToBytes(cryptoInfo.salt);
+  const iv = base64ToBytes(cryptoInfo.iv);
+  const ciphertext = base64ToBytes(payload.ciphertext);
+  const key = await deriveQuarryEncryptionKey(password, salt);
+  try {
+    const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+    return JSON.parse(new TextDecoder().decode(decrypted));
+  } catch {
+    throw new Error("Could not decrypt .quarry file. Check the password.");
+  }
 }
 
 async function writeClipboard(textValue) {
@@ -2083,6 +2170,43 @@ function setConnectionTestButton(label = "Test", status = "") {
   installIcons();
 }
 
+function updateConnectionExportButton() {
+  const button = $("#exportConnectionsButton");
+  if (!button) return;
+  const selectedCount = state.selectedConnectionIds.size;
+  const label = selectedCount > 0
+    ? `Export ${selectedCount} selected connection${selectedCount === 1 ? "" : "s"}`
+    : "Export connections";
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.classList.toggle("active", selectedCount > 0);
+}
+
+function closeConnectionMenu({ render = false } = {}) {
+  if (!state.openConnectionMenuId) return;
+  state.openConnectionMenuId = null;
+  state.connectionMenuPosition = null;
+  $$(".connection-item .connection-menu").forEach((menu) => {
+    menu.hidden = true;
+  });
+  if (render) renderConnections();
+}
+
+function toggleConnectionSelection(connectionId, selected) {
+  state.connectionSelectionMode = true;
+  if (selected === false) state.selectedConnectionIds.delete(connectionId);
+  else state.selectedConnectionIds.add(connectionId);
+  if (state.selectedConnectionIds.size === 0) state.connectionSelectionMode = false;
+  updateConnectionExportButton();
+  renderConnections();
+}
+
+function selectedExportConnections() {
+  if (state.selectedConnectionIds.size === 0) return [...state.connections];
+  const selected = new Set(state.selectedConnectionIds);
+  return state.connections.filter((connection) => selected.has(connection.id));
+}
+
 function renderConnections() {
   const list = $("#connectionList");
   const search = $("#connectionSearch").value.trim().toLowerCase();
@@ -2095,18 +2219,28 @@ function renderConnections() {
 
   if (connections.length === 0) {
     list.innerHTML = '<div class="empty-state">No saved connections.</div>';
+    updateConnectionExportButton();
     return;
   }
 
   list.innerHTML = "";
   for (const connection of connections) {
+    const selectedForExport = state.selectedConnectionIds.has(connection.id);
     const button = document.createElement("div");
-    button.className = `connection-item ${connection.id === state.activeConnectionId ? "active" : ""}`;
+    button.className = [
+      "connection-item",
+      connection.id === state.activeConnectionId ? "active" : "",
+      state.connectionSelectionMode ? "selecting" : "",
+      selectedForExport ? "selected-for-export" : ""
+    ].filter(Boolean).join(" ");
     button.role = "button";
     button.tabIndex = 0;
-    button.draggable = true;
+    button.draggable = !state.connectionSelectionMode;
     button.dataset.connectionId = connection.id;
     button.innerHTML = `
+      <span class="connection-select-slot">
+        <input class="connection-select-checkbox" type="checkbox" aria-label="Select ${escapeHtml(connection.name)} for export" />
+      </span>
       <span data-icon="database"></span>
       <span class="grow">
         <span class="connection-name-row">
@@ -2123,6 +2257,10 @@ function renderConnections() {
           <button type="button" data-action="settings">
             <span data-icon="settings"></span>
             Settings
+          </button>
+          <button type="button" data-action="select">
+            <span data-icon="check"></span>
+            Select
           </button>
           <button type="button" data-action="duplicate">
             <span data-icon="copy"></span>
@@ -2145,15 +2283,28 @@ function renderConnections() {
     tagNode.textContent = tag;
     applyTagStyle(tagNode, tag, connection.tagColor);
     button.querySelector(".connection-subtitle").textContent = `${connection.user}@${connection.host}/${connection.database}`;
-    button.addEventListener("click", () => connect(connection.id));
+    const checkbox = button.querySelector(".connection-select-checkbox");
+    checkbox.checked = selectedForExport;
+    checkbox.hidden = !state.connectionSelectionMode;
+    checkbox.disabled = !state.connectionSelectionMode;
+    checkbox.addEventListener("click", (event) => event.stopPropagation());
+    checkbox.addEventListener("change", () => toggleConnectionSelection(connection.id, checkbox.checked));
+    button.addEventListener("click", () => {
+      if (state.connectionSelectionMode) {
+        toggleConnectionSelection(connection.id, !state.selectedConnectionIds.has(connection.id));
+        return;
+      }
+      connect(connection.id);
+    });
     button.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        connect(connection.id);
+        if (state.connectionSelectionMode) toggleConnectionSelection(connection.id, !state.selectedConnectionIds.has(connection.id));
+        else connect(connection.id);
       }
     });
     button.addEventListener("dragstart", (event) => {
-      if (event.target.closest(".connection-actions")) {
+      if (state.connectionSelectionMode || event.target.closest(".connection-actions")) {
         event.preventDefault();
         return;
       }
@@ -2189,18 +2340,20 @@ function renderConnections() {
     button.querySelector(".connection-menu-button").addEventListener("click", (event) => {
       event.stopPropagation();
       const rect = event.currentTarget.getBoundingClientRect();
+      const shouldOpen = state.openConnectionMenuId !== connection.id;
       state.connectionMenuPosition = {
         top: rect.bottom + 6,
         left: Math.min(Math.max(8, rect.right - 150), window.innerWidth - 158)
       };
-      state.openConnectionMenuId = state.openConnectionMenuId === connection.id ? null : connection.id;
+      state.openConnectionMenuId = shouldOpen ? connection.id : null;
       renderConnections();
     });
     button.querySelector(".connection-menu").addEventListener("click", (event) => {
       event.stopPropagation();
       const action = event.target.closest("button")?.dataset.action;
-      state.openConnectionMenuId = null;
+      closeConnectionMenu();
       if (action === "settings") openConnectionDialog(connection);
+      if (action === "select") toggleConnectionSelection(connection.id, true);
       if (action === "duplicate") duplicateConnection(connection);
       if (action === "export") exportSingleConnection(connection);
       if (action === "delete") deleteConnection(connection);
@@ -2208,6 +2361,7 @@ function renderConnections() {
     list.append(button);
   }
   installIcons();
+  updateConnectionExportButton();
 }
 
 function reorderConnection(sourceId, targetId) {
@@ -2850,18 +3004,50 @@ function duplicateConnection(connection) {
   showToast(`Duplicated ${connection.name}.`);
 }
 
-function sanitizeConnectionForExport(connection) {
+function requestConnectionPassword({ title, subtitle, hint = "", confirmLabel = "Continue", required = false, privateKeyOption = false, mode = "password" } = {}) {
+  const dialog = $("#connectionPasswordDialog");
+  const input = $("#connectionPasswordInput");
+  const privateKeyRow = $("#connectionPrivateKeyExportRow");
+  const privateKeyCheckbox = $("#connectionPrivateKeyExport");
+  $("#connectionPasswordTitle").textContent = title || "Password";
+  $("#connectionPasswordSubtitle").textContent = subtitle || "";
+  $("#connectionPasswordHint").textContent = hint || "";
+  $("#connectionPasswordConfirmLabel").textContent = confirmLabel;
+  input.value = "";
+  input.required = required;
+  input.classList.remove("input-error");
+  privateKeyRow.hidden = !privateKeyOption;
+  privateKeyCheckbox.checked = false;
+  dialog.dataset.submitted = "false";
+  dialog.dataset.privateKeyOption = privateKeyOption ? "true" : "false";
+  dialog.dataset.passwordMode = mode;
+  dialog.showModal();
+  setTimeout(() => input.focus(), 0);
+
+  return new Promise((resolve) => {
+    connectionPasswordResolver = resolve;
+  });
+}
+
+function resolveConnectionPasswordDialog(value) {
+  if (!connectionPasswordResolver) return;
+  const resolve = connectionPasswordResolver;
+  connectionPasswordResolver = null;
+  resolve(value);
+}
+
+function sanitizeConnectionForExport(connection, options = {}) {
   const copy = typeof structuredClone === "function"
     ? structuredClone(connection)
     : JSON.parse(JSON.stringify(connection));
   copy.ssh = {
     ...(copy.ssh || {}),
-    privateKey: ""
+    privateKey: options.includePrivateKey ? copy.ssh?.privateKey || "" : ""
   };
   return copy;
 }
 
-function exportConnections(connections = state.connections, filename = "quarry_connections.quarry") {
+async function exportConnections(connections = state.connections, filename = "quarry_connections.quarry") {
   if (!connections.length) {
     showToast("No connections to export.", "error");
     return;
@@ -2871,19 +3057,36 @@ function exportConnections(connections = state.connections, filename = "quarry_c
     version: 1,
     exportedAt: new Date().toISOString(),
     tagColors: state.settings.tagColors || {},
-    connections: connections.map(sanitizeConnectionForExport)
+    connections: []
   };
-  downloadText(filename, JSON.stringify(payload, null, 2), "application/quarry+json;charset=utf-8");
-  showToast(`Exported ${connections.length} connection${connections.length === 1 ? "" : "s"}.`);
+  const options = await requestConnectionPassword({
+    title: "Export connections",
+    subtitle: "Set a password to encrypt the whole .quarry file.",
+    hint: "Leave blank to export plain JSON. Keep private key contents unchecked unless you really want to include pasted key text.",
+    confirmLabel: "Export",
+    privateKeyOption: true
+  });
+  if (options === null) return;
+  const password = options.password || "";
+  payload.connections = connections.map((connection) => sanitizeConnectionForExport(connection, {
+    includePrivateKey: Boolean(options.includePrivateKey)
+  }));
+  const output = password
+    ? await encryptQuarryPayload(payload, password)
+    : payload;
+  downloadText(filename, JSON.stringify(output, null, 2), "application/quarry+json;charset=utf-8");
+  showToast(`Exported ${connections.length} connection${connections.length === 1 ? "" : "s"}${password ? " encrypted" : ""}.`);
 }
 
-function exportAllConnections() {
+async function exportAllConnections() {
   const stamp = new Date().toISOString().slice(0, 10);
-  exportConnections(state.connections, `quarry_connections_${stamp}.quarry`);
+  const connections = selectedExportConnections();
+  const suffix = state.selectedConnectionIds.size > 0 ? "selected" : "all";
+  await exportConnections(connections, `quarry_connections_${suffix}_${stamp}.quarry`);
 }
 
-function exportSingleConnection(connection) {
-  exportConnections([connection], `${safeFileName(connection.name || "connection")}.quarry`);
+async function exportSingleConnection(connection) {
+  await exportConnections([connection], `${safeFileName(connection.name || "connection")}.quarry`);
 }
 
 function importedConnectionFromRaw(raw) {
@@ -2908,10 +3111,23 @@ function importedConnectionFromRaw(raw) {
       username: String(ssh.username || "").trim(),
       password: String(ssh.password || ""),
       privateKeyPath: String(ssh.privateKeyPath || "").trim(),
-      privateKey: "",
+      privateKey: String(ssh.privateKey || ""),
       passphrase: String(ssh.passphrase || "")
     }
   };
+}
+
+async function readQuarryConnectionsPayload(rawPayload) {
+  if (rawPayload?.type !== "quarry.connections.encrypted") return rawPayload;
+  encryptedConnectionImportPayload = rawPayload;
+  return requestConnectionPassword({
+    title: "Import encrypted .quarry",
+    subtitle: "Enter the export password to decrypt this file.",
+    hint: "This password is only used locally to decrypt the import file.",
+    confirmLabel: "Decrypt",
+    required: true,
+    mode: "decrypt-import"
+  });
 }
 
 async function importConnectionsFile(event) {
@@ -2921,7 +3137,9 @@ async function importConnectionsFile(event) {
   if (!file) return;
 
   try {
-    const payload = JSON.parse(await file.text());
+    const rawPayload = JSON.parse(await file.text());
+    const payload = await readQuarryConnectionsPayload(rawPayload);
+    if (!payload) return;
     const rawConnections = Array.isArray(payload) ? payload : payload?.connections;
     if (!Array.isArray(rawConnections)) {
       throw new Error("Invalid .quarry file.");
@@ -2966,6 +3184,8 @@ async function importConnectionsFile(event) {
 function deleteConnection(connection) {
   if (!confirm(`Delete connection "${connection.name}"?`)) return;
   const wasActive = state.activeConnectionId === connection.id;
+  state.selectedConnectionIds.delete(connection.id);
+  if (state.selectedConnectionIds.size === 0) state.connectionSelectionMode = false;
   state.connections = state.connections.filter((item) => item.id !== connection.id);
   state.connectionTabs = state.connectionTabs.filter((tab) => tab.connectionId !== connection.id);
   if (wasActive) {
@@ -3480,7 +3700,12 @@ function renderDataGrid(result, editable = false) {
     : result?.primaryKey?.length
       ? `primary key: ${result.primaryKey.join(", ")}`
       : "read-only grid";
-  $("#pageInfo").textContent = result ? `Rows ${rowStart}-${rowEnd}` : "Rows 0-0";
+  const totalText = result && Number.isFinite(Number(result.totalRows))
+    ? ` / ${formatRowNumber(result.totalRows)}`
+    : "";
+  $("#pageInfo").textContent = result
+    ? `Rows ${formatRowNumber(rowStart)}-${formatRowNumber(rowEnd)}${totalText}`
+    : "Rows 0-0";
   $("#dataElapsed").textContent = result?.elapsedMs ? formatDuration(result.elapsedMs) : "No query";
   $("#prevPageButton").disabled = !result || result.offset <= 0;
   $("#nextPageButton").disabled = !result?.hasMore;
@@ -3910,6 +4135,7 @@ function openObjectContextMenu(event) {
   menu.append(
     menuButton("Open", () => openFirstSelectedObject(), selected.length === 0),
     menuButton("Copy name", () => copySelectedObjectNames(), selected.length === 0),
+    menuButton("Export all data...", () => exportSelectedTablesData(), selected.length === 0),
     separator,
     menuButton(`Delete ${typeLabel}...`, () => openDeleteOptionsDialog("object"), selected.length === 0)
   );
@@ -4659,6 +4885,49 @@ function exportActiveResult(format, button = null) {
   });
 }
 
+function stripCachedTypeDefinitions(ddl = "") {
+  const textValue = String(ddl || "").trim();
+  const marker = "-- Table Definition";
+  const index = textValue.indexOf(marker);
+  return index >= 0 ? textValue.slice(index).trim() : textValue;
+}
+
+function buildCachedDatabaseSchema(connection) {
+  const catalog = state.catalog || {};
+  const tables = Object.values(catalog.tables || {}).sort((a, b) => (
+    `${a.schema}.${a.table}`.localeCompare(`${b.schema}.${b.table}`)
+  ));
+  const customTypes = [...(catalog.customTypes || [])].sort((a, b) => (
+    `${a.schema}.${a.name}`.localeCompare(`${b.schema}.${b.name}`)
+  ));
+  if (tables.length === 0 && customTypes.length === 0) {
+    throw new Error("Schema cache is empty. Refresh the connection schema first.");
+  }
+
+  const lines = [
+    "-- Quarry database schema export",
+    `-- Database: ${connection.database}`,
+    `-- Generated at ${new Date().toISOString()}`,
+    `-- Catalog hash: ${catalog.hash || "unknown"}`,
+    ""
+  ];
+
+  for (const typeInfo of customTypes) {
+    lines.push(`DROP TYPE IF EXISTS ${qualifiedJs(typeInfo.schema, typeInfo.name)};`);
+    lines.push(
+      `CREATE TYPE ${qualifiedJs(typeInfo.schema, typeInfo.name)} AS ENUM (${(typeInfo.labels || []).map(quoteLiteralJs).join(", ")});`
+    );
+    lines.push("");
+  }
+
+  for (const info of tables) {
+    const ddl = stripCachedTypeDefinitions(info.ddl);
+    if (ddl) lines.push(ddl, "", "");
+  }
+
+  return `${lines.join("\n").trim()}\n`;
+}
+
 async function exportDatabase(button = null) {
   const connection = activeConnection();
   if (!connection) {
@@ -4666,16 +4935,70 @@ async function exportDatabase(button = null) {
     return;
   }
   return withButtonLoading(button, async () => {
-    setBusy("Exporting schema");
+    setBusy("Downloading schema");
     try {
-      const response = await api("/api/export-database", { config: connectionConfig(connection) });
-      downloadText(`${safeFileName(connection.database)}_schema.sql`, response.sql, "text/sql;charset=utf-8");
-      setReady("Database schema exported");
+      const sql = buildCachedDatabaseSchema(connection);
+      downloadText(`${safeFileName(connection.database)}_schema.sql`, sql, "text/sql;charset=utf-8");
+      setReady("Schema downloaded");
+      showToast("Schema downloaded from cache.");
     } catch (error) {
       setReady("Export failed");
       showToast(error.message, "error");
     }
   });
+}
+
+async function exportSelectedTablesData() {
+  const selected = activeObjectSelection();
+  const connection = activeConnection();
+  if (!connection || selected.length === 0) {
+    showToast("Select a table first.", "error");
+    return;
+  }
+  const names = selected.map(({ table }) => `${table.schema}.${table.name}`);
+  const preview = names.length === 1 ? names[0] : `${names.length} tables`;
+  const confirmed = confirm(
+    `Export all rows from ${preview}?\n\nThis runs SELECT * without a limit. Large tables can take a long time and create a big CSV file.`
+  );
+  closeGridContextMenu();
+  if (!confirmed) return;
+
+  setBusy(`Exporting ${preview}`);
+  let exported = 0;
+  try {
+    for (const { table } of selected) {
+      const response = await api("/api/export-table-data", {
+        config: connectionConfig(connection),
+        schema: table.schema,
+        table: table.name
+      });
+      const data = response.data;
+      downloadText(
+        `${safeFileName(`${connection.database}_${table.schema}_${table.name}`)}.csv`,
+        rowsToCsv(data.fields || [], data.rows || []),
+        "text/csv;charset=utf-8"
+      );
+      appendQueryMessage({
+        status: "ok",
+        source: "Export",
+        sql: data.sql || `select * from ${qualifiedJs(table.schema, table.name)};`,
+        elapsedMs: data.elapsedMs,
+        rowCount: data.rows?.length ?? data.rowCount ?? null
+      });
+      exported += 1;
+    }
+    setReady(`Exported ${exported} table${exported === 1 ? "" : "s"}`);
+    showToast(`Exported ${exported} table${exported === 1 ? "" : "s"}.`);
+  } catch (error) {
+    setReady("Export failed");
+    appendQueryMessage({
+      status: "error",
+      source: "Export",
+      sql: names.map((name) => `select * from ${name};`).join("\n"),
+      error: error.message
+    });
+    showToast(error.message, "error", { log: false });
+  }
 }
 
 function openImportDialog() {
@@ -6430,6 +6753,48 @@ function bindEvents() {
   $("#importConnectionsButton").addEventListener("click", () => $("#connectionsImportFile").click());
   $("#connectionsImportFile").addEventListener("change", importConnectionsFile);
   $("#connectionSearch").addEventListener("input", renderConnections);
+  $("#connectionPasswordForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    if (!form.reportValidity()) return;
+    const dialog = $("#connectionPasswordDialog");
+    const input = $("#connectionPasswordInput");
+    const value = input.value;
+    const mode = dialog.dataset.passwordMode || "password";
+    if (mode === "decrypt-import") {
+      decryptQuarryPayload(encryptedConnectionImportPayload, value)
+        .then((payload) => {
+          encryptedConnectionImportPayload = null;
+          dialog.dataset.submitted = "true";
+          dialog.close();
+          resolveConnectionPasswordDialog(payload);
+        })
+        .catch((error) => {
+          input.classList.add("input-error");
+          input.select();
+          $("#connectionPasswordHint").textContent = error.message || "Could not decrypt .quarry file.";
+        });
+      return;
+    }
+    dialog.dataset.submitted = "true";
+    const result = dialog.dataset.privateKeyOption === "true"
+      ? { password: value, includePrivateKey: $("#connectionPrivateKeyExport").checked }
+      : value;
+    dialog.close();
+    resolveConnectionPasswordDialog(result);
+  });
+  $("#connectionPasswordInput").addEventListener("input", () => {
+    const dialog = $("#connectionPasswordDialog");
+    $("#connectionPasswordInput").classList.remove("input-error");
+    if (dialog.dataset.passwordMode === "decrypt-import") {
+      $("#connectionPasswordHint").textContent = "This password is only used locally to decrypt the import file.";
+    }
+  });
+  $("#connectionPasswordDialog").addEventListener("close", () => {
+    const dialog = $("#connectionPasswordDialog");
+    encryptedConnectionImportPayload = null;
+    if (dialog.dataset.submitted !== "true") resolveConnectionPasswordDialog(null);
+  });
   $("#objectSearch").addEventListener("input", renderSchema);
   $("#favoriteSearch").addEventListener("input", renderFavorites);
   $("#gridSearch").addEventListener("input", () => {
@@ -6645,27 +7010,26 @@ function bindEvents() {
   $("#sqlEditor").addEventListener("focus", renderSqlAutocompleteGhost);
   $("#sqlEditor").addEventListener("blur", renderSqlAutocompleteGhost);
   $("#sqlEditor").addEventListener("scroll", renderSqlAutocompleteGhost);
-	  document.addEventListener("keydown", (event) => {
-	    if (event.key === "Escape") closeSqlGenerationMenu();
-	    if (event.key === "Escape") closeFavoriteMenu();
-	    if (event.key === "Escape") closeSqlTabMenu();
-	    if (event.key === "Escape") closeSchemaCreateMenu();
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeSqlGenerationMenu();
+    if (event.key === "Escape") closeFavoriteMenu();
+    if (event.key === "Escape") closeSqlTabMenu();
+    if (event.key === "Escape") closeSchemaCreateMenu();
     if (event.key === "Escape" && state.openConnectionMenuId) {
-      state.openConnectionMenuId = null;
-	      renderConnections();
-	      return;
-	    }
-	    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "w") {
-	      event.preventDefault();
-	      closeFocusedTabOrWindow();
-	      return;
-	    }
-	    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "t") {
-	      event.preventDefault();
-	      createFocusedTab();
-	      return;
-	    }
-	    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a" && !isTextEditingTarget(event.target)) {
+      closeConnectionMenu();
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "w") {
+      event.preventDefault();
+      closeFocusedTabOrWindow();
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "t") {
+      event.preventDefault();
+      createFocusedTab();
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a" && !isTextEditingTarget(event.target)) {
       const handled = selectAllDataRows() || selectAllResultRows();
       if (handled) {
         event.preventDefault();
@@ -6706,9 +7070,9 @@ function bindEvents() {
       }
     }
   });
-	  window.desktopApi?.onRefreshDataShortcut?.(() => refreshCurrentDataTable());
-	  window.desktopApi?.onCloseTabShortcut?.(() => closeFocusedTabOrWindow());
-	  window.desktopApi?.onNewTabShortcut?.(() => createFocusedTab());
+  window.desktopApi?.onRefreshDataShortcut?.(() => refreshCurrentDataTable());
+  window.desktopApi?.onCloseTabShortcut?.(() => closeFocusedTabOrWindow());
+  window.desktopApi?.onNewTabShortcut?.(() => createFocusedTab());
   document.addEventListener("pointerdown", (event) => {
     if (!event.target.closest("#gridContextMenu")) closeGridContextMenu();
     if (!event.target.closest("#filterJoinMenu") && !event.target.closest("#filterJoinMenuButton")) closeFilterJoinMenu();
@@ -6717,9 +7081,12 @@ function bindEvents() {
     if (!event.target.closest("#sqlTabMenu") && !event.target.closest(".sql-tab")) closeSqlTabMenu();
     if (!event.target.closest("#schemaCreateMenu") && !event.target.closest("#schemaCreateMenuButton")) closeSchemaCreateMenu();
     if (!state.openConnectionMenuId || event.target.closest(".connection-actions")) return;
-    state.openConnectionMenuId = null;
-    renderConnections();
+    closeConnectionMenu();
   }, true);
+  document.addEventListener("focusin", (event) => {
+    if (!state.openConnectionMenuId || event.target.closest(".connection-actions")) return;
+    closeConnectionMenu();
+  });
   document.addEventListener("mouseup", () => {
     state.dragSelection = null;
   });

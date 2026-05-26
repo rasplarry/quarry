@@ -192,11 +192,11 @@
               <span data-icon="check"></span>
               <span class="button-label">Commit</span>
             </button>
-            <button class="tool-button" id="exportDbButton" title="Export database schema" aria-label="Export database schema">
+            <button class="tool-button schema-download-button" id="exportDbButton" title="Download schema" aria-label="Download schema">
               <span data-icon="download"></span>
-              <span class="button-label">DB</span>
+              <span class="button-label">Schema</span>
             </button>
-            <button class="tool-button" id="importButton" title="Import SQL, JSON, or CSV" aria-label="Import SQL, JSON, or CSV">
+            <button class="tool-button import-run-button" id="importButton" title="Import and run SQL, JSON, or CSV" aria-label="Import and run SQL, JSON, or CSV">
               <span data-icon="upload"></span>
               <span class="button-label">Import</span>
             </button>
@@ -665,6 +665,36 @@
           <button class="danger-button" id="confirmDeleteOptionsButton" type="submit">
             <span data-icon="trash"></span>
             Mark for Delete
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="connectionPasswordDialog">
+      <form method="dialog" class="dialog-card compact" id="connectionPasswordForm">
+        <div class="dialog-header">
+          <div>
+            <h2 id="connectionPasswordTitle">Password</h2>
+            <p id="connectionPasswordSubtitle">Leave blank to export plain text.</p>
+          </div>
+          <button class="icon-button dialog-close" type="button" aria-label="Close">
+            <span data-icon="x"></span>
+          </button>
+        </div>
+        <label>
+          Password
+          <input id="connectionPasswordInput" type="password" autocomplete="off" />
+        </label>
+        <label class="check-row" id="connectionPrivateKeyExportRow" hidden>
+          <input id="connectionPrivateKeyExport" type="checkbox" />
+          Include pasted SSH private key contents
+        </label>
+        <p class="field-hint" id="connectionPasswordHint"></p>
+        <div class="dialog-actions">
+          <button class="tool-button dialog-close" type="button">Cancel</button>
+          <button class="primary-button" id="connectionPasswordConfirmButton" type="submit">
+            <span data-icon="check"></span>
+            <span id="connectionPasswordConfirmLabel">Continue</span>
           </button>
         </div>
       </form>
