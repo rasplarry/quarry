@@ -336,6 +336,8 @@ const state = {
   renamingFavoriteId: null,
   schemaCreateMenuPosition: null,
   selectedObjectKeys: new Set(),
+  selectedTypeKeys: new Set(),
+  schemaSelectionKind: "table",
   pendingObjectDeletes: [],
   deleteOptionsTarget: null,
   structureColumns: {},
@@ -582,10 +584,12 @@ function clearConnectionWorkspace() {
   state.filterJoin = "and";
   state.tableTabs = [];
   state.activeTableTabId = null;
-  state.pendingEdits = [];
-  state.pendingObjectDeletes = [];
-  state.selectedObjectKeys = new Set();
-  state.resultSets = [];
+	  state.pendingEdits = [];
+	  state.pendingObjectDeletes = [];
+	  state.selectedObjectKeys = new Set();
+	  state.selectedTypeKeys = new Set();
+	  state.schemaSelectionKind = "table";
+	  state.resultSets = [];
   state.activeResultIndex = 0;
   state.queryMessages = [];
   state.sqlTabs = [defaultSqlTab()];
@@ -664,10 +668,12 @@ function restoreConnectionTab(tab) {
   state.filterJoin = normalizedFilterJoin(tab.filterJoin);
   state.tableTabs = tab.tableTabs || [];
   state.activeTableTabId = tab.activeTableTabId || null;
-  state.pendingEdits = tab.pendingEdits || [];
-  state.pendingObjectDeletes = tab.pendingObjectDeletes || [];
-  state.selectedObjectKeys = new Set();
-  state.resultSets = tab.resultSets || [];
+	  state.pendingEdits = tab.pendingEdits || [];
+	  state.pendingObjectDeletes = tab.pendingObjectDeletes || [];
+	  state.selectedObjectKeys = new Set();
+	  state.selectedTypeKeys = new Set();
+	  state.schemaSelectionKind = "table";
+	  state.resultSets = tab.resultSets || [];
   state.activeResultIndex = tab.activeResultIndex || 0;
   state.queryMessages = tab.queryMessages || [];
   state.sqlTabs = tab.sqlTabs?.length ? tab.sqlTabs : [defaultSqlTab()];
@@ -1103,6 +1109,8 @@ function resetActiveDatabaseWorkspace() {
   state.pendingEdits = [];
   state.pendingObjectDeletes = [];
   state.selectedObjectKeys = new Set();
+  state.selectedTypeKeys = new Set();
+  state.schemaSelectionKind = "table";
   state.resultSets = [];
   state.activeResultIndex = 0;
   state.queryMessages = [];
@@ -1619,6 +1627,10 @@ function tableKey(schema, table) {
   return `${schema}.${table}`;
 }
 
+function typeKey(schema, name) {
+  return `type:${schema}.${name}`;
+}
+
 function allSchemaTables() {
   return state.schemas.flatMap((schema) => schema.tables || []);
 }
@@ -1629,6 +1641,27 @@ function tableByObjectKey(key) {
 
 function pendingObjectDeleteForKey(key) {
   return state.pendingObjectDeletes.find((change) => change.objectKey === key) || null;
+}
+
+function schemaTreeSearch() {
+  return $("#objectSearch")?.value?.trim?.().toLowerCase() || "";
+}
+
+function visibleSchemaTables() {
+  const search = schemaTreeSearch();
+  return state.schemas
+    .filter((schema) => schema.name === state.selectedSchema)
+    .flatMap((schema) => (schema.tables || []).filter((table) => (
+      `${schema.name}.${table.name}`.toLowerCase().includes(search)
+    )));
+}
+
+function visibleCustomTypes() {
+  const search = schemaTreeSearch();
+  return (state.catalog?.customTypes || []).filter((typeInfo) => (
+    typeInfo.schema === state.selectedSchema
+    && `${typeInfo.schema}.${typeInfo.name} ${typeInfo.labels?.join(" ") || ""}`.toLowerCase().includes(search)
+  ));
 }
 
 function activeObjectSelection() {
@@ -1646,6 +1679,9 @@ function activeObjectSelection() {
 function updateSchemaSelectionClasses() {
   $$("#schemaTree .schema-row[data-object-key]").forEach((row) => {
     row.classList.toggle("selected-object", state.selectedObjectKeys.has(row.dataset.objectKey));
+  });
+  $$("#schemaTree .schema-row[data-type-key]").forEach((row) => {
+    row.classList.toggle("selected-object", state.selectedTypeKeys.has(row.dataset.typeKey));
   });
 }
 
@@ -2378,7 +2414,7 @@ function reorderConnection(sourceId, targetId) {
 
 function renderSchema() {
   const tree = $("#schemaTree");
-  const search = $("#objectSearch").value.trim().toLowerCase();
+  const search = schemaTreeSearch();
   updateActiveDatabaseLabel();
   renderSchemaSelect();
   if (!activeConnection()) {
@@ -2442,6 +2478,8 @@ function renderSchema() {
           ? "view"
           : `${table.columns.length}`;
       const selectObject = (mode = "single") => {
+        state.schemaSelectionKind = "table";
+        state.selectedTypeKeys = new Set();
         if (mode === "single") {
           state.selectedObjectKeys = new Set([key]);
         } else if (mode === "toggle") {
@@ -2471,6 +2509,8 @@ function renderSchema() {
       row.addEventListener("contextmenu", (event) => {
         event.preventDefault();
         if (!state.selectedObjectKeys.has(key)) {
+          state.schemaSelectionKind = "table";
+          state.selectedTypeKeys = new Set();
           state.selectedObjectKeys = new Set([key]);
           renderSchema();
         }
@@ -2523,12 +2563,25 @@ function renderCustomTypes(tree, search) {
   details.open = true;
   const summary = document.createElement("summary");
   summary.textContent = `Custom Types (${types.length})`;
+  summary.tabIndex = 0;
+  summary.addEventListener("mousedown", () => {
+    state.schemaSelectionKind = "type";
+  });
+  summary.addEventListener("focus", () => {
+    state.schemaSelectionKind = "type";
+  });
   details.append(summary);
 
   for (const typeInfo of types) {
+    const key = typeKey(typeInfo.schema, typeInfo.name);
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "schema-row type-row";
+    button.className = [
+      "schema-row",
+      "type-row",
+      state.selectedTypeKeys.has(key) ? "selected-object" : ""
+    ].filter(Boolean).join(" ");
+    button.dataset.typeKey = key;
     button.innerHTML = `
       <span data-icon="filter"></span>
       <span class="grow"></span>
@@ -2536,7 +2589,40 @@ function renderCustomTypes(tree, search) {
     `;
     button.querySelector(".grow").textContent = `${typeInfo.schema}.${typeInfo.name}`;
     button.querySelector(".badge").textContent = `${typeInfo.labels?.length || 0}`;
-    button.addEventListener("click", () => openTypeEditor(typeInfo));
+    const selectType = (mode = "single") => {
+      state.schemaSelectionKind = "type";
+      state.selectedObjectKeys = new Set();
+      if (mode === "single") {
+        state.selectedTypeKeys = new Set([key]);
+      } else if (mode === "toggle") {
+        if (state.selectedTypeKeys.has(key)) state.selectedTypeKeys.delete(key);
+        else state.selectedTypeKeys.add(key);
+      } else {
+        state.selectedTypeKeys.add(key);
+      }
+      updateSchemaSelectionClasses();
+    };
+    button.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
+      state.schemaDragMoved = false;
+      selectType(event.metaKey || event.ctrlKey ? "toggle" : "single");
+      state.dragSelection = { source: "schema-types", mode: "add" };
+    });
+    button.addEventListener("mouseenter", () => {
+      if (state.dragSelection?.source !== "schema-types") return;
+      state.schemaDragMoved = true;
+      if (!state.selectedTypeKeys.has(key)) selectType("add");
+    });
+    button.addEventListener("click", (event) => {
+      if (event.metaKey || event.ctrlKey || state.schemaDragMoved) return;
+    });
+    button.addEventListener("dblclick", () => openTypeEditor(typeInfo));
+    button.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        openTypeEditor(typeInfo);
+      }
+    });
     details.append(button);
   }
   tree.append(details);
@@ -3499,6 +3585,8 @@ async function openTable(schema, table, offset = 0, options = {}) {
   state.selectedSchema = schema;
   state.selectedTableKey = tableKey(schema, table);
   state.selectedObjectKeys = new Set([state.selectedTableKey]);
+  state.selectedTypeKeys = new Set();
+  state.schemaSelectionKind = "table";
   state.currentOffset = offset;
   if (!preserveRows) state.selectedRowIndex = null;
   state.selectedRows = new Set();
@@ -3903,6 +3991,34 @@ function selectionForSource(source) {
 
 function isTextEditingTarget(target = document.activeElement) {
   return Boolean(target?.closest?.("input, textarea, select, [contenteditable='true']"));
+}
+
+function selectAllSchemaTreeItems() {
+  if (!$("#connectionsPanel")?.classList.contains("active")) return false;
+  if (!activeConnection() || !$("#schemaTree")) return false;
+  const activeRow = document.activeElement?.closest?.("#schemaTree .schema-row");
+  const activeTypeTree = document.activeElement?.closest?.("#schemaTree .type-tree");
+  const kind = activeRow?.classList.contains("type-row") || activeTypeTree
+    ? "type"
+    : state.schemaSelectionKind || "table";
+
+  if (kind === "type") {
+    const keys = visibleCustomTypes().map((typeInfo) => typeKey(typeInfo.schema, typeInfo.name));
+    if (keys.length === 0) return false;
+    state.selectedObjectKeys = new Set();
+    state.selectedTypeKeys = new Set(keys);
+    state.schemaSelectionKind = "type";
+    updateSchemaSelectionClasses();
+    return true;
+  }
+
+  const keys = visibleSchemaTables().map((table) => tableKey(table.schema, table.name));
+  if (keys.length === 0) return false;
+  state.selectedObjectKeys = new Set(keys);
+  state.selectedTypeKeys = new Set();
+  state.schemaSelectionKind = "table";
+  updateSchemaSelectionClasses();
+  return true;
 }
 
 function selectAllDataRows() {
@@ -7030,7 +7146,7 @@ function bindEvents() {
       return;
     }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a" && !isTextEditingTarget(event.target)) {
-      const handled = selectAllDataRows() || selectAllResultRows();
+      const handled = selectAllSchemaTreeItems() || selectAllDataRows() || selectAllResultRows();
       if (handled) {
         event.preventDefault();
         return;
