@@ -315,6 +315,9 @@ const state = {
   filterJoin: "and",
   selectedRows: new Set(),
   selectedResultRows: new Set(),
+  dataSelectionAnchorKey: null,
+  resultSelectionAnchorIndex: null,
+  activeGridSource: null,
   dragSelection: null,
   tableTabs: [],
   activeTableTabId: null,
@@ -338,6 +341,8 @@ const state = {
   selectedObjectKeys: new Set(),
   selectedTypeKeys: new Set(),
   schemaSelectionKind: "table",
+  schemaObjectSelectionAnchorKey: null,
+  schemaTypeSelectionAnchorKey: null,
   pendingObjectDeletes: [],
   deleteOptionsTarget: null,
   structureColumns: {},
@@ -580,6 +585,9 @@ function clearConnectionWorkspace() {
   state.currentTableInfo = null;
   state.currentOffset = 0;
   state.selectedRowIndex = null;
+  state.selectedRows = new Set();
+  state.dataSelectionAnchorKey = null;
+  state.activeGridSource = null;
   state.filters = [];
   state.filterJoin = "and";
   state.tableTabs = [];
@@ -589,8 +597,13 @@ function clearConnectionWorkspace() {
 	  state.selectedObjectKeys = new Set();
 	  state.selectedTypeKeys = new Set();
 	  state.schemaSelectionKind = "table";
+  state.schemaObjectSelectionAnchorKey = null;
+  state.schemaTypeSelectionAnchorKey = null;
 	  state.resultSets = [];
   state.activeResultIndex = 0;
+  state.selectedResultRows = new Set();
+  state.resultSelectionAnchorIndex = null;
+  state.activeGridSource = null;
   state.queryMessages = [];
   state.sqlTabs = [defaultSqlTab()];
   state.sqlTabSequence = 1;
@@ -664,6 +677,7 @@ function restoreConnectionTab(tab) {
   state.currentTableInfo = tab.currentTableInfo || null;
   state.currentOffset = tab.currentOffset || 0;
   state.selectedRowIndex = tab.selectedRowIndex ?? null;
+  restoreDataSelectionFromSelectedIndex(state.currentTable);
   state.filters = cloneFilters(tab.filters || []);
   state.filterJoin = normalizedFilterJoin(tab.filterJoin);
   state.tableTabs = tab.tableTabs || [];
@@ -673,8 +687,13 @@ function restoreConnectionTab(tab) {
 	  state.selectedObjectKeys = new Set();
 	  state.selectedTypeKeys = new Set();
 	  state.schemaSelectionKind = "table";
+  state.schemaObjectSelectionAnchorKey = null;
+  state.schemaTypeSelectionAnchorKey = null;
 	  state.resultSets = tab.resultSets || [];
   state.activeResultIndex = tab.activeResultIndex || 0;
+  state.selectedResultRows = new Set();
+  state.resultSelectionAnchorIndex = null;
+  state.activeGridSource = null;
   state.queryMessages = tab.queryMessages || [];
   state.sqlTabs = tab.sqlTabs?.length ? tab.sqlTabs : [defaultSqlTab()];
   state.activeSqlTabId = tab.activeSqlTabId || state.sqlTabs[0]?.id || null;
@@ -832,6 +851,9 @@ function createSqlTab(sql = "", title = null) {
   };
   state.sqlTabs.push(tab);
   state.activeSqlTabId = tab.id;
+  state.selectedResultRows = new Set();
+  state.resultSelectionAnchorIndex = null;
+  state.activeGridSource = "result";
   syncSqlTabsToActiveConnectionTab();
   $("#sqlEditor").value = sql;
   renderSqlAutocompleteGhost();
@@ -849,6 +871,9 @@ function activateSqlTab(id) {
   const tab = state.sqlTabs.find((item) => item.id === id);
   if (!tab) return;
   state.activeSqlTabId = id;
+  state.selectedResultRows = new Set();
+  state.resultSelectionAnchorIndex = null;
+  state.activeGridSource = "result";
   syncSqlTabsToActiveConnectionTab();
   $("#sqlEditor").value = tab.sql || "";
   renderSqlAutocompleteGhost();
@@ -870,6 +895,9 @@ function closeSqlTab(id) {
     only.resultView = "data";
     only.messages = [];
     only.generationReview = null;
+    state.selectedResultRows = new Set();
+    state.resultSelectionAnchorIndex = null;
+    state.activeGridSource = "result";
     syncSqlTabsToActiveConnectionTab();
     $("#sqlEditor").value = "";
     renderSqlAutocompleteGhost();
@@ -886,6 +914,9 @@ function closeSqlTab(id) {
   if (state.activeSqlTabId === id) {
     const next = state.sqlTabs[Math.max(0, index - 1)] || state.sqlTabs[0];
     state.activeSqlTabId = next.id;
+    state.selectedResultRows = new Set();
+    state.resultSelectionAnchorIndex = null;
+    state.activeGridSource = "result";
     syncSqlTabsToActiveConnectionTab();
     $("#sqlEditor").value = next.sql || "";
     renderSqlAutocompleteGhost();
@@ -1102,6 +1133,9 @@ function resetActiveDatabaseWorkspace() {
   state.currentTableInfo = null;
   state.currentOffset = 0;
   state.selectedRowIndex = null;
+  state.selectedRows = new Set();
+  state.dataSelectionAnchorKey = null;
+  state.activeGridSource = null;
   state.filters = [];
   state.filterJoin = "and";
   state.tableTabs = [];
@@ -1111,8 +1145,13 @@ function resetActiveDatabaseWorkspace() {
   state.selectedObjectKeys = new Set();
   state.selectedTypeKeys = new Set();
   state.schemaSelectionKind = "table";
+  state.schemaObjectSelectionAnchorKey = null;
+  state.schemaTypeSelectionAnchorKey = null;
   state.resultSets = [];
   state.activeResultIndex = 0;
+  state.selectedResultRows = new Set();
+  state.resultSelectionAnchorIndex = null;
+  state.activeGridSource = null;
   state.queryMessages = [];
   const tab = activeConnectionTab();
   if (tab) {
@@ -1132,6 +1171,9 @@ function resetActiveDatabaseWorkspace() {
     tab.pendingObjectDeletes = [];
     tab.resultSets = [];
     tab.activeResultIndex = 0;
+    state.selectedResultRows = new Set();
+    state.resultSelectionAnchorIndex = null;
+    state.activeGridSource = null;
     tab.queryMessages = [];
   }
   renderSchema();
@@ -1664,6 +1706,46 @@ function visibleCustomTypes() {
   ));
 }
 
+function selectionModeFromEvent(event) {
+  if (event.shiftKey && (event.metaKey || event.ctrlKey)) return "range-add";
+  if (event.shiftKey) return "range";
+  if (event.metaKey || event.ctrlKey) return "toggle";
+  return "single";
+}
+
+function orderedRange(values, anchorValue, targetValue) {
+  const targetIndex = values.indexOf(targetValue);
+  if (targetIndex < 0) return [];
+  const anchorIndex = values.indexOf(anchorValue);
+  if (anchorIndex < 0) return [targetValue];
+  const start = Math.min(anchorIndex, targetIndex);
+  const end = Math.max(anchorIndex, targetIndex);
+  return values.slice(start, end + 1);
+}
+
+function nextKeySelection(currentSelection, orderedKeys, anchorKey, targetKey, mode) {
+  if (mode === "single") return new Set([targetKey]);
+  if (mode === "toggle") {
+    const next = new Set(currentSelection);
+    if (next.has(targetKey)) next.delete(targetKey);
+    else next.add(targetKey);
+    return next;
+  }
+  if (mode === "range" || mode === "range-add") {
+    const range = orderedRange(orderedKeys, anchorKey, targetKey);
+    if (mode === "range-add") return new Set([...currentSelection, ...range]);
+    return new Set(range);
+  }
+  return new Set([...currentSelection, targetKey]);
+}
+
+function nextSelectionAnchor(currentAnchor, orderedKeys, targetKey, mode) {
+  if ((mode === "range" || mode === "range-add" || mode === "add") && orderedKeys.includes(currentAnchor)) {
+    return currentAnchor;
+  }
+  return targetKey;
+}
+
 function activeObjectSelection() {
   const keys = state.selectedObjectKeys.size
     ? [...state.selectedObjectKeys]
@@ -1721,6 +1803,16 @@ function dataRowKey(row, rowIndex, result = state.currentTable) {
   }
   row.__rowKey = `row-${rowIndex}-${uid()}`;
   return row.__rowKey;
+}
+
+function restoreDataSelectionFromSelectedIndex(result = state.currentTable) {
+  state.selectedRows = new Set();
+  state.dataSelectionAnchorKey = null;
+  if (state.selectedRowIndex === null || !result?.rows?.[state.selectedRowIndex]) return;
+  const row = result.rows[state.selectedRowIndex];
+  const rowKey = dataRowKey(row, state.selectedRowIndex, result);
+  state.selectedRows = new Set([rowKey]);
+  state.dataSelectionAnchorKey = rowKey;
 }
 
 function rowPkValues(row, result = state.currentTable) {
@@ -2032,6 +2124,7 @@ function closeRowInspector() {
   clearPendingRowInspector();
   state.selectedRowIndex = null;
   state.selectedRows = new Set();
+  state.dataSelectionAnchorKey = null;
   const tab = activeTableTab();
   if (tab) tab.selectedRowIndex = null;
   $$("#dataGrid tr.selected-row").forEach((item) => item.classList.remove("selected-row"));
@@ -2146,7 +2239,8 @@ function activateTableTab(id) {
   state.currentTable = tab.result;
   state.currentTableInfo = tab.tableInfo;
   state.currentOffset = tab.result?.offset || 0;
-  state.selectedRowIndex = tab.selectedRowIndex;
+  state.selectedRowIndex = tab.selectedRowIndex ?? null;
+  restoreDataSelectionFromSelectedIndex(state.currentTable);
   state.filters = cloneFilters(tab.filters);
   state.filterJoin = normalizedFilterJoin(tab.filterJoin);
   state.pendingEdits = [...(tab.pendingEdits || [])];
@@ -2478,23 +2572,30 @@ function renderSchema() {
           ? "view"
           : `${table.columns.length}`;
       const selectObject = (mode = "single") => {
+        const orderedKeys = visibleSchemaTables().map((item) => tableKey(item.schema, item.name));
         state.schemaSelectionKind = "table";
         state.selectedTypeKeys = new Set();
-        if (mode === "single") {
-          state.selectedObjectKeys = new Set([key]);
-        } else if (mode === "toggle") {
-          if (state.selectedObjectKeys.has(key)) state.selectedObjectKeys.delete(key);
-          else state.selectedObjectKeys.add(key);
-        } else {
-          state.selectedObjectKeys.add(key);
-        }
+        state.schemaObjectSelectionAnchorKey = nextSelectionAnchor(
+          state.schemaObjectSelectionAnchorKey,
+          orderedKeys,
+          key,
+          mode
+        );
+        state.selectedObjectKeys = nextKeySelection(
+          state.selectedObjectKeys,
+          orderedKeys,
+          state.schemaObjectSelectionAnchorKey,
+          key,
+          mode
+        );
         updateSchemaSelectionClasses();
       };
       row.addEventListener("mousedown", (event) => {
         if (event.button !== 0) return;
         state.schemaDragMoved = false;
-        selectObject(event.metaKey || event.ctrlKey ? "toggle" : "single");
-        state.dragSelection = { source: "schema", mode: "add" };
+        const mode = selectionModeFromEvent(event);
+        selectObject(mode);
+        state.dragSelection = mode.startsWith("range") ? null : { source: "schema", mode: "add" };
       });
       row.addEventListener("mouseenter", () => {
         if (state.dragSelection?.source !== "schema") return;
@@ -2502,7 +2603,7 @@ function renderSchema() {
         if (!state.selectedObjectKeys.has(key)) selectObject("add");
       });
       row.addEventListener("click", (event) => {
-        if (event.metaKey || event.ctrlKey || state.schemaDragMoved) return;
+        if (event.metaKey || event.ctrlKey || event.shiftKey || state.schemaDragMoved) return;
         openTable(table.schema, table.name, 0);
       });
       row.addEventListener("dblclick", () => openTable(table.schema, table.name, 0, { force: true }));
@@ -2512,6 +2613,7 @@ function renderSchema() {
           state.schemaSelectionKind = "table";
           state.selectedTypeKeys = new Set();
           state.selectedObjectKeys = new Set([key]);
+          state.schemaObjectSelectionAnchorKey = key;
           renderSchema();
         }
         openObjectContextMenu(event);
@@ -2590,23 +2692,30 @@ function renderCustomTypes(tree, search) {
     button.querySelector(".grow").textContent = `${typeInfo.schema}.${typeInfo.name}`;
     button.querySelector(".badge").textContent = `${typeInfo.labels?.length || 0}`;
     const selectType = (mode = "single") => {
+      const orderedKeys = visibleCustomTypes().map((item) => typeKey(item.schema, item.name));
       state.schemaSelectionKind = "type";
       state.selectedObjectKeys = new Set();
-      if (mode === "single") {
-        state.selectedTypeKeys = new Set([key]);
-      } else if (mode === "toggle") {
-        if (state.selectedTypeKeys.has(key)) state.selectedTypeKeys.delete(key);
-        else state.selectedTypeKeys.add(key);
-      } else {
-        state.selectedTypeKeys.add(key);
-      }
+      state.schemaTypeSelectionAnchorKey = nextSelectionAnchor(
+        state.schemaTypeSelectionAnchorKey,
+        orderedKeys,
+        key,
+        mode
+      );
+      state.selectedTypeKeys = nextKeySelection(
+        state.selectedTypeKeys,
+        orderedKeys,
+        state.schemaTypeSelectionAnchorKey,
+        key,
+        mode
+      );
       updateSchemaSelectionClasses();
     };
     button.addEventListener("mousedown", (event) => {
       if (event.button !== 0) return;
       state.schemaDragMoved = false;
-      selectType(event.metaKey || event.ctrlKey ? "toggle" : "single");
-      state.dragSelection = { source: "schema-types", mode: "add" };
+      const mode = selectionModeFromEvent(event);
+      selectType(mode);
+      state.dragSelection = mode.startsWith("range") ? null : { source: "schema-types", mode: "add" };
     });
     button.addEventListener("mouseenter", () => {
       if (state.dragSelection?.source !== "schema-types") return;
@@ -2614,7 +2723,7 @@ function renderCustomTypes(tree, search) {
       if (!state.selectedTypeKeys.has(key)) selectType("add");
     });
     button.addEventListener("click", (event) => {
-      if (event.metaKey || event.ctrlKey || state.schemaDragMoved) return;
+      if (event.metaKey || event.ctrlKey || event.shiftKey || state.schemaDragMoved) return;
     });
     button.addEventListener("dblclick", () => openTypeEditor(typeInfo));
     button.addEventListener("keydown", (event) => {
@@ -2926,6 +3035,7 @@ function setWorkspaceMode(mode) {
 
 function showSqlMode() {
   setWorkspaceMode("sql");
+  state.activeGridSource = "result";
   $("#sqlModeButton").classList.add("active");
   $("#dataModeButton").classList.remove("active");
   $("#structureModeButton").classList.remove("active");
@@ -2937,6 +3047,7 @@ function showSqlMode() {
 
 function showDataMode() {
   setWorkspaceMode("data");
+  state.activeGridSource = "data";
   $("#sqlModeButton").classList.remove("active");
   $("#dataModeButton").classList.add("active");
   $("#structureModeButton").classList.remove("active");
@@ -3587,9 +3698,12 @@ async function openTable(schema, table, offset = 0, options = {}) {
   state.selectedObjectKeys = new Set([state.selectedTableKey]);
   state.selectedTypeKeys = new Set();
   state.schemaSelectionKind = "table";
+  state.schemaObjectSelectionAnchorKey = state.selectedTableKey;
+  state.schemaTypeSelectionAnchorKey = null;
   state.currentOffset = offset;
   if (!preserveRows) state.selectedRowIndex = null;
   state.selectedRows = new Set();
+  state.dataSelectionAnchorKey = null;
   state.filters = cloneFilters(tab.filters);
   state.filterJoin = normalizedFilterJoin(tab.filterJoin);
   if (!preserveRows) state.pendingEdits = [];
@@ -3776,6 +3890,54 @@ async function toggleSort(column) {
   await openTable(state.currentTable.schema, state.currentTable.table, 0, { force: true, preserveRows: true, loadingAction: "sort", skipHistory: true });
 }
 
+function visibleDataGridItems(result, filter = $("#gridSearch").value.trim().toLowerCase()) {
+  return (result?.rows || [])
+    .map((row, rowIndex) => ({
+      row,
+      rowIndex,
+      rowKey: dataRowKey(row, rowIndex, result)
+    }))
+    .filter(({ row }) => {
+      if (!filter) return true;
+      return Object.values(row).some((value) => String(value ?? "").toLowerCase().includes(filter));
+    });
+}
+
+function syncDataRowSelectionClasses() {
+  $$("#dataGrid tbody tr[data-row-key]").forEach((row) => {
+    row.classList.toggle("selected-row", state.selectedRows.has(row.dataset.rowKey));
+  });
+}
+
+function selectDataGridRow(row, rowIndex, rowKey, visibleItems, mode, options = {}) {
+  const orderedKeys = visibleItems.map((item) => item.rowKey);
+  state.activeGridSource = "data";
+  state.dataSelectionAnchorKey = nextSelectionAnchor(
+    state.dataSelectionAnchorKey,
+    orderedKeys,
+    rowKey,
+    mode
+  );
+  state.selectedRows = nextKeySelection(
+    state.selectedRows,
+    orderedKeys,
+    state.dataSelectionAnchorKey,
+    rowKey,
+    mode
+  );
+  const activeItem = state.selectedRows.has(rowKey)
+    ? { row, rowIndex }
+    : visibleItems.find((item) => state.selectedRows.has(item.rowKey)) || null;
+  state.selectedRowIndex = activeItem?.rowIndex ?? null;
+  const tab = activeTableTab();
+  if (tab) tab.selectedRowIndex = state.selectedRowIndex;
+  syncDataRowSelectionClasses();
+  if (options.showInspector !== false && activeItem) {
+    showRowInspector(activeItem.row, activeItem.rowIndex, options.anchorCell || null, { defer: Boolean(options.deferInspector) });
+  }
+  updateApplySelectedState();
+}
+
 function renderDataGrid(result, editable = false) {
   const table = $("#dataGrid");
   const filter = $("#gridSearch").value.trim().toLowerCase();
@@ -3804,10 +3966,7 @@ function renderDataGrid(result, editable = false) {
     return;
   }
 
-  const rows = (result.rows || []).filter((row) => {
-    if (!filter) return true;
-    return Object.values(row).some((value) => String(value ?? "").toLowerCase().includes(filter));
-  });
+  const visibleItems = visibleDataGridItems(result, filter);
 
   const thead = document.createElement("thead");
   const headRow = document.createElement("tr");
@@ -3827,39 +3986,21 @@ function renderDataGrid(result, editable = false) {
   thead.append(headRow);
 
   const tbody = document.createElement("tbody");
-  rows.forEach((row, rowIndex) => {
+  visibleItems.forEach(({ row, rowIndex, rowKey }) => {
     const pkValues = rowPkValues(row, result);
-    const rowKey = dataRowKey(row, rowIndex, result);
     const tr = document.createElement("tr");
     tr.className = [
-      state.selectedRows.has(rowKey) || state.selectedRowIndex === rowIndex ? "selected-row" : "",
+      state.selectedRows.has(rowKey) ? "selected-row" : "",
       row.__pendingDelete ? "pending-delete-row" : "",
       row.__pendingInsert ? "pending-insert-row" : ""
     ].filter(Boolean).join(" ");
     tr.dataset.rowKey = rowKey;
-    const selectRow = (mode = "single", options = {}) => {
-      state.selectedRowIndex = rowIndex;
-      const tab = activeTableTab();
-      if (tab) tab.selectedRowIndex = rowIndex;
-      if (mode === "single") {
-        state.selectedRows = new Set([rowKey]);
-        $$("#dataGrid tbody tr").forEach((item) => item.classList.remove("selected-row"));
-      } else if (mode === "toggle") {
-        if (state.selectedRows.has(rowKey)) state.selectedRows.delete(rowKey);
-        else state.selectedRows.add(rowKey);
-      } else {
-        state.selectedRows.add(rowKey);
-      }
-      tr.classList.add("selected-row");
-      if (options.showInspector !== false) {
-        showRowInspector(row, rowIndex, options.anchorCell || null, { defer: Boolean(options.deferInspector) });
-      }
-      updateApplySelectedState();
-    };
+    const selectRow = (mode = "single", options = {}) => selectDataGridRow(row, rowIndex, rowKey, visibleItems, mode, options);
     tr.addEventListener("mousedown", (event) => {
       if (event.button !== 0) return;
-      selectRow(event.metaKey || event.ctrlKey ? "toggle" : "single", { showInspector: false });
-      state.dragSelection = { source: "data", mode: "add" };
+      const mode = selectionModeFromEvent(event);
+      selectRow(mode, { showInspector: false });
+      state.dragSelection = mode.startsWith("range") ? null : { source: "data", mode: "add" };
     });
     tr.addEventListener("mouseenter", () => {
       if (state.dragSelection?.source !== "data") return;
@@ -3867,10 +4008,12 @@ function renderDataGrid(result, editable = false) {
     });
     tr.addEventListener("contextmenu", (event) => {
       event.preventDefault();
+      state.activeGridSource = "data";
       if (!state.selectedRows.has(rowKey)) selectRow("single", { anchorCell: event.target?.closest?.("td") || null });
       openGridContextMenu(event, "data");
     });
     tr.addEventListener("click", (event) => {
+      if (event.metaKey || event.ctrlKey || event.shiftKey) return;
       selectRow("single", {
         anchorCell: event.target?.closest?.("td") || null,
         deferInspector: event.detail === 1
@@ -3891,6 +4034,7 @@ function renderDataGrid(result, editable = false) {
           td.classList.add("editable-cell");
           td.addEventListener("click", (event) => {
             event.stopPropagation();
+            if (event.metaKey || event.ctrlKey || event.shiftKey) return;
             selectRow("single", { anchorCell: td, deferInspector: event.detail === 1 });
           });
           td.addEventListener("dblclick", (event) => {
@@ -3904,6 +4048,7 @@ function renderDataGrid(result, editable = false) {
         }
         td.addEventListener("click", (event) => {
           event.stopPropagation();
+          if (event.metaKey || event.ctrlKey || event.shiftKey) return;
           selectRow("single", { anchorCell: td, deferInspector: event.detail === 1 });
         });
         td.addEventListener("dblclick", (event) => {
@@ -3942,8 +4087,9 @@ function renderDataGrid(result, editable = false) {
   });
 
   table.replaceChildren(thead, tbody);
-  if (rows[state.selectedRowIndex]) {
-    renderRowInspector(rows[state.selectedRowIndex], state.selectedRowIndex);
+  const selectedItem = visibleItems.find((item) => item.rowIndex === state.selectedRowIndex);
+  if (selectedItem) {
+    renderRowInspector(selectedItem.row, selectedItem.rowIndex);
   } else {
     renderRowInspector(null);
   }
@@ -3993,6 +4139,28 @@ function isTextEditingTarget(target = document.activeElement) {
   return Boolean(target?.closest?.("input, textarea, select, [contenteditable='true']"));
 }
 
+function gridSourceForCommand(event = null) {
+  if (event?.target?.closest?.("#dataGrid")) return "data";
+  if (event?.target?.closest?.("#resultsBody")) return "result";
+  if (document.activeElement?.closest?.("#dataGrid")) return "data";
+  if (document.activeElement?.closest?.("#resultsBody")) return "result";
+  if (state.activeGridSource === "result" && !$(".results-pane")?.hidden && activeSqlTab()?.resultView === "data") return "result";
+  if (state.activeGridSource === "data" && !$("#dataPane")?.hidden) return "data";
+  if (!$("#dataPane")?.hidden && state.currentTable?.rows?.length) return "data";
+  if (!$(".results-pane")?.hidden && activeSqlTab()?.resultView === "data" && activeResult()?.rows?.length) return "result";
+  return null;
+}
+
+function selectAllRowsForCurrentContext(event = null) {
+  if (event?.target?.closest?.("#schemaTree") || document.activeElement?.closest?.("#schemaTree")) {
+    return selectAllSchemaTreeItems();
+  }
+  const source = gridSourceForCommand(event);
+  if (source === "result") return selectAllResultRows();
+  if (source === "data") return selectAllDataRows();
+  return selectAllSchemaTreeItems();
+}
+
 function selectAllSchemaTreeItems() {
   if (!$("#connectionsPanel")?.classList.contains("active")) return false;
   if (!activeConnection() || !$("#schemaTree")) return false;
@@ -4008,6 +4176,7 @@ function selectAllSchemaTreeItems() {
     state.selectedObjectKeys = new Set();
     state.selectedTypeKeys = new Set(keys);
     state.schemaSelectionKind = "type";
+    state.schemaTypeSelectionAnchorKey = keys[0] || null;
     updateSchemaSelectionClasses();
     return true;
   }
@@ -4017,16 +4186,20 @@ function selectAllSchemaTreeItems() {
   state.selectedObjectKeys = new Set(keys);
   state.selectedTypeKeys = new Set();
   state.schemaSelectionKind = "table";
+  state.schemaObjectSelectionAnchorKey = keys[0] || null;
   updateSchemaSelectionClasses();
   return true;
 }
 
 function selectAllDataRows() {
   if ($("#dataPane").hidden || !state.currentTable?.rows?.length) return false;
-  state.selectedRows = new Set(
-    state.currentTable.rows.map((row, rowIndex) => dataRowKey(row, rowIndex, state.currentTable))
-  );
-  state.selectedRowIndex = state.currentTable.rows.length ? 0 : null;
+  const visibleItems = visibleDataGridItems(state.currentTable);
+  if (visibleItems.length === 0) return false;
+  const rowKeys = visibleItems.map((item) => item.rowKey);
+  state.selectedRows = new Set(rowKeys);
+  state.dataSelectionAnchorKey = rowKeys[0] || null;
+  state.selectedRowIndex = visibleItems[0]?.rowIndex ?? null;
+  state.activeGridSource = "data";
   const tab = activeTableTab();
   if (tab) tab.selectedRowIndex = state.selectedRowIndex;
   renderDataGrid(state.currentTable, true);
@@ -4035,8 +4208,10 @@ function selectAllDataRows() {
 
 function selectAllResultRows() {
   const result = activeResult();
-  if (!$("#dataPane").hidden || !result?.rows?.length || activeSqlTab()?.resultView !== "data") return false;
+  if ($(".results-pane")?.hidden || !result?.rows?.length || activeSqlTab()?.resultView !== "data") return false;
   state.selectedResultRows = new Set(result.rows.map((_, rowIndex) => rowIndex));
+  state.resultSelectionAnchorIndex = result.rows.length ? 0 : null;
+  state.activeGridSource = "result";
   renderResults();
   return true;
 }
@@ -4099,6 +4274,34 @@ async function copySelectedRows(format, source) {
   closeGridContextMenu();
 }
 
+function handleGridKeyboardShortcut(event) {
+  if (!(event.metaKey || event.ctrlKey) || isTextEditingTarget(event.target)) return false;
+  const source = gridSourceForCommand(event);
+  if (!source) return false;
+  const key = event.key.toLowerCase();
+  const selection = selectionForSource(source);
+
+  if (key === "c" && selection.rows.length > 0) {
+    event.preventDefault();
+    void copySelectedRows(event.shiftKey ? "csvHeader" : "plain", source);
+    return true;
+  }
+
+  if (key === "v" && source === "data" && selection.rows.length > 0) {
+    event.preventDefault();
+    void pasteRowsFromClipboard();
+    return true;
+  }
+
+  if (key === "d" && source === "data" && selection.rows.length > 0) {
+    event.preventDefault();
+    duplicateSelectedRows();
+    return true;
+  }
+
+  return false;
+}
+
 function addPendingInsert(row) {
   if (!state.currentTable) return;
   row.__pendingInsert = true;
@@ -4111,6 +4314,8 @@ function addPendingInsert(row) {
     tab.pendingEdits = [...state.pendingEdits];
   }
   state.selectedRows = new Set([row.__rowKey]);
+  state.dataSelectionAnchorKey = row.__rowKey;
+  state.activeGridSource = "data";
   state.selectedRowIndex = 0;
   renderDataGrid(state.currentTable, true);
   updateApplySelectedState();
@@ -5444,6 +5649,32 @@ async function saveTypeChanges(event) {
   }
 }
 
+function syncResultRowSelectionClasses() {
+  $$("#resultsBody tr[data-row-index]").forEach((row) => {
+    row.classList.toggle("selected-row", state.selectedResultRows.has(Number(row.dataset.rowIndex)));
+  });
+}
+
+function selectResultRow(rowIndex, mode) {
+  const result = activeResult();
+  const orderedIndexes = (result?.rows || []).map((_, index) => index);
+  state.activeGridSource = "result";
+  state.resultSelectionAnchorIndex = nextSelectionAnchor(
+    state.resultSelectionAnchorIndex,
+    orderedIndexes,
+    rowIndex,
+    mode
+  );
+  state.selectedResultRows = nextKeySelection(
+    state.selectedResultRows,
+    orderedIndexes,
+    state.resultSelectionAnchorIndex,
+    rowIndex,
+    mode
+  );
+  syncResultRowSelectionClasses();
+}
+
 function renderResults() {
   const tabs = $("#resultTabs");
   const body = $("#resultsBody");
@@ -5537,26 +5768,21 @@ function renderResults() {
     tr.className = state.selectedResultRows.has(rowIndex) ? "selected-row" : "";
     tr.addEventListener("mousedown", (event) => {
       if (event.button !== 0) return;
-      if (event.metaKey || event.ctrlKey) {
-        if (state.selectedResultRows.has(rowIndex)) state.selectedResultRows.delete(rowIndex);
-        else state.selectedResultRows.add(rowIndex);
-      } else {
-        state.selectedResultRows = new Set([rowIndex]);
-      }
-      state.dragSelection = { source: "result" };
-      $$("#resultsBody tr").forEach((item) => item.classList.remove("selected-row"));
-      state.selectedResultRows.forEach((index) => {
-        $(`#resultsBody tr[data-row-index="${index}"]`)?.classList.add("selected-row");
-      });
+      const mode = selectionModeFromEvent(event);
+      selectResultRow(rowIndex, mode);
+      state.dragSelection = mode.startsWith("range") ? null : { source: "result" };
     });
     tr.addEventListener("mouseenter", () => {
       if (state.dragSelection?.source !== "result") return;
-      state.selectedResultRows.add(rowIndex);
-      tr.classList.add("selected-row");
+      selectResultRow(rowIndex, "add");
     });
     tr.addEventListener("contextmenu", (event) => {
       event.preventDefault();
-      if (!state.selectedResultRows.has(rowIndex)) state.selectedResultRows = new Set([rowIndex]);
+      state.activeGridSource = "result";
+      if (!state.selectedResultRows.has(rowIndex)) {
+        state.selectedResultRows = new Set([rowIndex]);
+        state.resultSelectionAnchorIndex = rowIndex;
+      }
       renderResults();
       openGridContextMenu(event, "result");
     });
@@ -5583,6 +5809,7 @@ function renderResults() {
       button.addEventListener("click", () => {
         sqlTab.activeResultIndex = index;
         state.selectedResultRows = new Set();
+        state.resultSelectionAnchorIndex = null;
         syncActiveSqlResultState(sqlTab);
         renderResults();
       });
@@ -5604,6 +5831,42 @@ function selectedSqlStatement() {
   const endOffset = after.indexOf(";");
   const end = endOffset === -1 ? editor.value.length : editor.selectionStart + endOffset;
   return editor.value.slice(start, end);
+}
+
+function sqlEditorSelection() {
+  const editor = $("#sqlEditor");
+  if (!editor) return null;
+  return {
+    start: editor.selectionStart,
+    end: editor.selectionEnd,
+    direction: editor.selectionDirection || "none"
+  };
+}
+
+function restoreSqlEditorSelection(selection, options = {}) {
+  const editor = $("#sqlEditor");
+  if (!editor || !selection) return;
+  if (options.focus !== false) editor.focus({ preventScroll: true });
+  editor.setSelectionRange(selection.start, selection.end, selection.direction || "none");
+  renderSqlAutocompleteGhost();
+}
+
+async function runSqlPreservingEditorSelection(sql, selection = sqlEditorSelection()) {
+  restoreSqlEditorSelection(selection);
+  try {
+    await runSql(sql);
+  } finally {
+    restoreSqlEditorSelection(selection);
+  }
+}
+
+function preserveSqlEditorSelectionOnMouseDown(button) {
+  button?.addEventListener("mousedown", (event) => {
+    const editor = $("#sqlEditor");
+    if (!editor || document.activeElement !== editor) return;
+    if (editor.selectionStart === editor.selectionEnd) return;
+    event.preventDefault();
+  });
 }
 
 const sqlIdentifierPart = String.raw`(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*)(?:\.(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*))?`;
@@ -6192,6 +6455,7 @@ async function runSql(sql) {
     targetTab.activeResultIndex = 0;
     targetTab.resultView = "data";
     state.selectedResultRows = new Set();
+    state.resultSelectionAnchorIndex = null;
     appendQueryMessage({
       status: "ok",
       source: "SQL",
@@ -6771,6 +7035,7 @@ async function commitEdits(changes = state.pendingEdits, objectChanges = state.p
       const tab = activeTableTab();
       if (tab) tab.pendingEdits = [...state.pendingEdits];
       state.selectedRows = new Set();
+      state.dataSelectionAnchorKey = null;
       addHistoryEntry("edit", `Save edits on ${state.currentTable.schema}.${state.currentTable.table}`);
       rowSummary = [
         response.data.updated ? `${response.data.updated} updated` : "",
@@ -6938,11 +7203,13 @@ function bindEvents() {
   $("#addStructureColumnButton").addEventListener("click", () => addStructureDraft("column"));
   $("#structureTriggersButton").addEventListener("click", () => showToast("Trigger editing is planned."));
   $("#structureBottomInfoButton").addEventListener("click", openTableInfo);
+  preserveSqlEditorSelectionOnMouseDown($("#runCurrentButton"));
+  preserveSqlEditorSelectionOnMouseDown($("#runAllButton"));
   $("#runAllButton").addEventListener("click", () => {
     saveActiveSqlTab();
-    runSql($("#sqlEditor").value);
+    void runSqlPreservingEditorSelection($("#sqlEditor").value);
   });
-  $("#runCurrentButton").addEventListener("click", () => runSql(selectedSqlStatement()));
+  $("#runCurrentButton").addEventListener("click", () => void runSqlPreservingEditorSelection(selectedSqlStatement()));
   $("#formatButton").addEventListener("click", formatSql);
   $("#commitButton").addEventListener("click", () => commitEdits());
   $("#applySelectedButton").addEventListener("click", () => commitEdits());
@@ -7106,7 +7373,7 @@ function bindEvents() {
   $("#sqlEditor").addEventListener("keydown", (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
       event.preventDefault();
-      runSql(event.shiftKey ? selectedSqlStatement() : $("#sqlEditor").value);
+      void runSqlPreservingEditorSelection(event.shiftKey ? $("#sqlEditor").value : selectedSqlStatement());
     }
     if (event.key === "Tab") {
       event.preventDefault();
@@ -7146,12 +7413,13 @@ function bindEvents() {
       return;
     }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a" && !isTextEditingTarget(event.target)) {
-      const handled = selectAllSchemaTreeItems() || selectAllDataRows() || selectAllResultRows();
+      const handled = selectAllRowsForCurrentContext(event);
       if (handled) {
         event.preventDefault();
         return;
       }
     }
+    if (handleGridKeyboardShortcut(event)) return;
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f" && !$("#dataPane").hidden) {
       event.preventDefault();
       toggleFilterBar(true, { ensureRow: true });

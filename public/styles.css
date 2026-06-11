@@ -893,6 +893,11 @@ button {
   z-index: 2;
 }
 
+#sqlEditor::selection {
+  color: #082f2d;
+  background: rgba(34, 197, 181, 0.34);
+}
+
 .sql-editor-wrap {
   position: relative;
   min-width: 0;
