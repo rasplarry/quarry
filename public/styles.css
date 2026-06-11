@@ -1553,6 +1553,12 @@ table {
   font-size: 12px;
 }
 
+#dataGrid,
+#resultsBody table {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 th,
 td {
   max-width: 420px;
@@ -1596,6 +1602,8 @@ td {
 
 td[contenteditable="true"] {
   outline: 1px solid transparent;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 td.editable-cell {
@@ -1606,6 +1614,18 @@ td.editable-cell {
   width: 100%;
   height: 24px;
   padding: 2px 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.cell-text-editor {
+  width: 100%;
+  height: 24px;
+  padding: 2px 6px;
+  border: 1px solid #d6a20c;
+  border-radius: 4px;
+  background: #fff8dc;
+  color: var(--code);
   font-family: var(--mono);
   font-size: 12px;
 }

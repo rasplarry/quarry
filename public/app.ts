@@ -695,6 +695,7 @@ function restoreConnectionTab(tab) {
   state.resultSelectionAnchorIndex = null;
   state.activeGridSource = null;
   state.queryMessages = tab.queryMessages || [];
+  syncTableInfoCacheFromCatalog();
   state.sqlTabs = tab.sqlTabs?.length ? tab.sqlTabs : [defaultSqlTab()];
   state.activeSqlTabId = tab.activeSqlTabId || state.sqlTabs[0]?.id || null;
   state.sqlTabSequence = tab.sqlTabSequence || 1;
@@ -1121,6 +1122,44 @@ function loadCatalog(connection = activeConnection()) {
 function saveCatalog(connection = activeConnection()) {
   save(catalogKey(connection), state.catalog);
   save("local-db-studio:catalog:last", state.catalog);
+}
+
+function catalogTableInfo(schema, table) {
+  return state.catalog?.tables?.[tableKey(schema, table)] || null;
+}
+
+function syncTableInfoCacheFromCatalog() {
+  for (const tab of state.tableTabs || []) {
+    const freshInfo = catalogTableInfo(tab.schema, tab.table);
+    tab.tableInfo = freshInfo || null;
+    if (freshInfo && tab.result) {
+      tab.result.primaryKey = freshInfo.primaryKey || tab.result.primaryKey || [];
+    }
+  }
+
+  if (state.currentTable) {
+    const freshInfo = catalogTableInfo(state.currentTable.schema, state.currentTable.table);
+    if (freshInfo) {
+      state.currentTableInfo = freshInfo;
+      state.currentTable.primaryKey = freshInfo.primaryKey || state.currentTable.primaryKey || [];
+    } else {
+      state.currentTableInfo = null;
+    }
+  }
+
+  $("#tableInfoButton").disabled = !state.currentTableInfo;
+  $("#structureInfoButton").disabled = !state.currentTableInfo;
+
+  const connectionTab = activeConnectionTab();
+  if (connectionTab) {
+    connectionTab.catalog = state.catalog;
+    connectionTab.currentTableInfo = state.currentTableInfo;
+    connectionTab.tableTabs = state.tableTabs;
+  }
+
+  if ($("#tableInfoDialog")?.open && state.currentTableInfo) {
+    renderTableInfoDialog(state.currentTableInfo);
+  }
 }
 
 function resetActiveDatabaseWorkspace() {
@@ -1883,6 +1922,53 @@ function openEnumCellEditor(cell, field, row, rowIndex, rowKey, pkValues) {
   });
 }
 
+function openTextCellInputEditor(cell, field, row, rowIndex, rowKey, pkValues) {
+  if (cell.querySelector("input")) return;
+  clearPendingRowInspector();
+  const beforeValue = editValue(row[field.name]);
+  const input = document.createElement("input");
+  input.className = "cell-text-editor";
+  input.value = beforeValue === "NULL" ? "" : beforeValue;
+  cell.replaceChildren(input);
+  input.focus();
+  input.select();
+
+  const finish = (commit = true) => {
+    if (!cell.contains(input)) return;
+    const nextValue = input.value;
+    cell.replaceChildren();
+    if (commit && nextValue !== beforeValue) {
+      cell.classList.add("changed");
+      recordCellEdit({
+        row,
+        rowIndex,
+        rowKey,
+        pkValues,
+        column: field.name,
+        value: nextValue
+      });
+      renderCellValue(cell, field, row, cellValue(nextValue));
+    } else {
+      renderCellValue(cell, field, row, cellValue(row[field.name]));
+    }
+    showRowInspector(row, rowIndex, cell);
+  };
+
+  input.addEventListener("mousedown", (event) => event.stopPropagation());
+  input.addEventListener("click", (event) => event.stopPropagation());
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      finish(true);
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      finish(false);
+    }
+  });
+  input.addEventListener("blur", () => finish(true));
+}
+
 async function openForeignKeyTab(fk, row) {
   if (!fk.foreign_schema || !fk.foreign_table || !Array.isArray(fk.foreign_columns)) return;
   const filters = fk.columns.map((column, index) => ({
@@ -1899,6 +1985,8 @@ async function openForeignKeyTab(fk, row) {
   const tab = getOrCreateTableTab(fk.foreign_schema, fk.foreign_table);
   tab.filters = filters;
   tab.filterJoin = "and";
+  tab.filtersApplied = true;
+  tab.filterBarOpen = true;
   tab.gridSearch = "";
   state.filters = cloneFilters(filters);
   state.filterJoin = "and";
@@ -1947,6 +2035,18 @@ function persistTableFilterState(schema, table, filters = state.filters, filterJ
   save(storageKeys.tableFilters, state.tableFilters);
 }
 
+function filtersAppliedForTab(tab = activeTableTab()) {
+  return Boolean(tab?.filtersApplied);
+}
+
+function activeQueryFiltersForTab(tab = activeTableTab()) {
+  return filtersAppliedForTab(tab) ? cloneFilters(tab?.filters || []) : [];
+}
+
+function activeQueryFilterJoinForTab(tab = activeTableTab()) {
+  return filtersAppliedForTab(tab) ? normalizedFilterJoin(tab?.filterJoin || state.filterJoin) : "and";
+}
+
 function activeTableTab() {
   return state.tableTabs.find((tab) => tab.id === state.activeTableTabId) || null;
 }
@@ -1965,6 +2065,8 @@ function getOrCreateTableTab(schema, table) {
       tableInfo: state.catalog?.tables?.[id] || null,
       filters: savedFilters.filters,
       filterJoin: savedFilters.filterJoin,
+      filtersApplied: false,
+      filterBarOpen: false,
       sort: null,
       gridSearch: "",
       selectedRowIndex: null,
@@ -1982,6 +2084,7 @@ function saveActiveTabState() {
   tab.tableInfo = state.currentTableInfo;
   tab.filters = cloneFilters(state.filters);
   tab.filterJoin = normalizedFilterJoin(state.filterJoin);
+  tab.filterBarOpen = !$("#filterBar")?.hidden && state.filters.length > 0;
   tab.sort = state.currentTable?.sort || tab.sort || null;
   tab.gridSearch = $("#gridSearch")?.value || "";
   tab.selectedRowIndex = state.selectedRowIndex;
@@ -2047,9 +2150,9 @@ function filterToSql(filter) {
 }
 
 function tableQueryPreview(schema, table, offset, tab = activeTableTab()) {
-  const joinMode = normalizedFilterJoin(tab?.filterJoin || state.filterJoin);
+  const joinMode = activeQueryFilterJoinForTab(tab);
   const joiner = joinMode === "or" ? " OR " : " AND ";
-  const where = (tab?.filters || [])
+  const where = activeQueryFiltersForTab(tab)
     .map(filterToSql)
     .filter(Boolean)
     .map((clause) => `(${clause})`)
@@ -3660,10 +3763,13 @@ async function refreshSchema(options = {}) {
     state.schemas = data.schemas || [];
     state.catalog = data.catalog || { hash: "", tables: {}, customTypes: [] };
     saveCatalog(connection);
+    syncTableInfoCacheFromCatalog();
     const tab = activeConnectionTab();
     if (tab) {
       tab.schemas = state.schemas;
       tab.catalog = state.catalog;
+      tab.currentTableInfo = state.currentTableInfo;
+      tab.tableTabs = state.tableTabs;
       tab.status = $("#connectionState").textContent || connection.name;
     }
     renderSchema();
@@ -3754,8 +3860,8 @@ async function openTable(schema, table, offset = 0, options = {}) {
       table,
       limit: pageSize,
       offset,
-      filters: tab.filters,
-      filterJoin: tab.filterJoin,
+      filters: activeQueryFiltersForTab(tab),
+      filterJoin: activeQueryFilterJoinForTab(tab),
       sort: tab.sort,
       primaryKey: tab.tableInfo?.primaryKey || state.currentTableInfo?.primaryKey || []
     });
@@ -3795,8 +3901,8 @@ async function openTable(schema, table, offset = 0, options = {}) {
         sql: querySql,
         schema,
         table,
-        filters: cloneFilters(tab.filters),
-        filterJoin: tab.filterJoin,
+        filters: activeQueryFiltersForTab(tab),
+        filterJoin: activeQueryFilterJoinForTab(tab),
         sort: tab.sort || null
       });
     }
@@ -3827,8 +3933,8 @@ async function refreshCurrentDataTable() {
     schema: state.currentTable.schema,
     table: state.currentTable.table,
     offset: state.currentOffset,
-    filters: cloneFilters(tab.filters),
-    filterJoin: tab.filterJoin,
+    filters: activeQueryFiltersForTab(tab),
+    filterJoin: activeQueryFilterJoinForTab(tab),
     sort: tab.sort || null
   });
   await openTable(
@@ -3998,6 +4104,8 @@ function renderDataGrid(result, editable = false) {
     const selectRow = (mode = "single", options = {}) => selectDataGridRow(row, rowIndex, rowKey, visibleItems, mode, options);
     tr.addEventListener("mousedown", (event) => {
       if (event.button !== 0) return;
+      if (event.target?.closest?.("input, textarea, select, [contenteditable='true']")) return;
+      event.preventDefault();
       const mode = selectionModeFromEvent(event);
       selectRow(mode, { showInspector: false });
       state.dragSelection = mode.startsWith("range") ? null : { source: "data", mode: "add" };
@@ -4031,17 +4139,27 @@ function renderDataGrid(result, editable = false) {
       if (canEdit) {
         const enumOptions = enumOptionsForColumn(field.name);
         if (enumOptions.length > 0) {
+          let enumEditorTimer = null;
           td.classList.add("editable-cell");
           td.addEventListener("click", (event) => {
             event.stopPropagation();
+            if (event.detail >= 3) {
+              clearTimeout(enumEditorTimer);
+              openTextCellInputEditor(td, field, row, rowIndex, rowKey, pkValues);
+              return;
+            }
             if (event.metaKey || event.ctrlKey || event.shiftKey) return;
             selectRow("single", { anchorCell: td, deferInspector: event.detail === 1 });
           });
           td.addEventListener("dblclick", (event) => {
             event.stopPropagation();
             clearPendingRowInspector();
-            openEnumCellEditor(td, field, row, rowIndex, rowKey, pkValues);
-            showRowInspector(row, rowIndex, td);
+            clearTimeout(enumEditorTimer);
+            enumEditorTimer = setTimeout(() => {
+              enumEditorTimer = null;
+              openEnumCellEditor(td, field, row, rowIndex, rowKey, pkValues);
+              showRowInspector(row, rowIndex, td);
+            }, 220);
           });
           tr.append(td);
           return;
@@ -4701,6 +4819,7 @@ function renderFilters() {
     enabled.checked = filter.enabled !== false;
     enabled.addEventListener("change", () => {
       filter.enabled = enabled.checked;
+      markFilterDraftChanged();
       saveActiveTabState();
       renderFilterControls();
     });
@@ -4713,6 +4832,7 @@ function renderFilters() {
     column.value = filter.column || "";
     column.addEventListener("change", () => {
       filter.column = column.value;
+      markFilterDraftChanged();
       saveActiveTabState();
     });
 
@@ -4725,6 +4845,7 @@ function renderFilters() {
     value.value = filter.value || "";
     value.addEventListener("input", () => {
       filter.value = value.value;
+      markFilterDraftChanged();
       saveActiveTabState();
     });
 
@@ -4733,6 +4854,7 @@ function renderFilters() {
     value2.value = filter.value2 || "";
     value2.addEventListener("input", () => {
       filter.value2 = value2.value;
+      markFilterDraftChanged();
       saveActiveTabState();
     });
 
@@ -4751,6 +4873,7 @@ function renderFilters() {
         value2.value = "";
       }
       syncSecondValue();
+      markFilterDraftChanged();
       saveActiveTabState();
     });
 
@@ -4767,6 +4890,11 @@ function renderFilters() {
     list.append(row);
   });
   installIcons();
+}
+
+function markFilterDraftChanged() {
+  const tab = activeTableTab();
+  if (tab) tab.filtersApplied = false;
 }
 
 function renderFilterControls() {
@@ -4788,29 +4916,39 @@ function renderFilterControls() {
 function syncFilterBarVisibility() {
   const bar = $("#filterBar");
   if (!bar) return;
-  bar.hidden = state.filters.length === 0;
+  const tab = activeTableTab();
+  const shouldShow = Boolean(tab?.filterBarOpen && state.filters.length > 0);
+  bar.hidden = !shouldShow;
   if (!bar.hidden) renderFilters();
   closeFilterJoinMenu();
 }
 
 function toggleFilterBar(force, options = {}) {
   const bar = $("#filterBar");
+  const tab = activeTableTab();
   const shouldShow = typeof force === "boolean" ? force : bar.hidden;
   if (!shouldShow) {
     bar.hidden = true;
+    if (tab) tab.filterBarOpen = false;
     closeFilterJoinMenu();
+    saveActiveTabState();
     return;
   }
   if (shouldShow && options.ensureRow && state.filters.length === 0) {
     state.filters.push({ enabled: true, column: "", operator: "=", value: "", value2: "" });
-    saveActiveTabState();
   }
+  if (tab) tab.filterBarOpen = state.filters.length > 0;
+  bar.hidden = !state.filters.length;
+  saveActiveTabState();
   syncFilterBarVisibility();
 }
 
 function addFilter() {
   state.filters.push({ enabled: true, column: "", operator: "=", value: "", value2: "" });
   $("#filterBar").hidden = false;
+  markFilterDraftChanged();
+  const tab = activeTableTab();
+  if (tab) tab.filterBarOpen = true;
   saveActiveTabState();
   renderFilters();
 }
@@ -4818,9 +4956,15 @@ function addFilter() {
 async function removeFilterAt(index = state.filters.length - 1) {
   if (index < 0 || index >= state.filters.length) return;
   state.filters.splice(index, 1);
+  markFilterDraftChanged();
   saveActiveTabState();
   syncFilterBarVisibility();
   if (state.filters.length === 0 && state.currentTable) {
+    const tab = activeTableTab();
+    if (tab) {
+      tab.filtersApplied = false;
+      tab.filterBarOpen = false;
+    }
     await openTable(state.currentTable.schema, state.currentTable.table, 0, { force: true });
   }
 }
@@ -4853,11 +4997,16 @@ async function applyFilters(join = state.filterJoin) {
   if (!state.currentTable) return;
   setFilterJoin(join);
   closeFilterJoinMenu();
+  const tab = activeTableTab();
+  if (tab) {
+    tab.filtersApplied = state.filters.some((filter) => filter.enabled !== false && filter.column);
+    tab.filterBarOpen = state.filters.length > 0;
+  }
   saveActiveTabState();
   addHistoryEntry("filter", `Filter ${state.currentTable.schema}.${state.currentTable.table}`, {
     sql: tableQueryPreview(state.currentTable.schema, state.currentTable.table, 0, activeTableTab()),
-    filters: cloneFilters(state.filters),
-    filterJoin: state.filterJoin
+    filters: activeQueryFiltersForTab(activeTableTab()),
+    filterJoin: activeQueryFilterJoinForTab(activeTableTab())
   });
   await openTable(state.currentTable.schema, state.currentTable.table, 0, { force: true });
 }
@@ -5176,6 +5325,12 @@ function renderStructure(info = state.currentTableInfo) {
   updateStructureSaveState();
 }
 
+function renderTableInfoDialog(info) {
+  $("#tableInfoTitle").textContent = `${info.schema}.${info.table}`;
+  $("#tableInfoSubtitle").textContent = `${info.kind} - ${info.columns.length} columns - cached ${info.hash || ""}`;
+  $("#tableDdlViewer").value = info.ddl || "-- DDL unavailable in catalog cache. Refresh schema to reload table metadata.";
+}
+
 function openTableInfo() {
   const info = state.currentTableInfo;
   if (!info) {
@@ -5183,9 +5338,7 @@ function openTableInfo() {
     return;
   }
 
-  $("#tableInfoTitle").textContent = `${info.schema}.${info.table}`;
-  $("#tableInfoSubtitle").textContent = `${info.kind} - ${info.columns.length} columns - cached ${info.hash || ""}`;
-  $("#tableDdlViewer").value = info.ddl || "-- DDL unavailable in catalog cache. Refresh schema to reload table metadata.";
+  renderTableInfoDialog(info);
   $("#tableInfoDialog").showModal();
 }
 
@@ -5768,6 +5921,8 @@ function renderResults() {
     tr.className = state.selectedResultRows.has(rowIndex) ? "selected-row" : "";
     tr.addEventListener("mousedown", (event) => {
       if (event.button !== 0) return;
+      if (event.target?.closest?.("input, textarea, select, [contenteditable='true']")) return;
+      event.preventDefault();
       const mode = selectionModeFromEvent(event);
       selectResultRow(rowIndex, mode);
       state.dragSelection = mode.startsWith("range") ? null : { source: "result" };
@@ -6428,6 +6583,12 @@ function completeSqlAtCursor(editor) {
   return true;
 }
 
+function sqlMayChangeSchema(sql) {
+  return /\b(?:alter|create|drop|comment|rename)\s+(?:table|type|index|view|materialized\s+view|schema|function|trigger|constraint|sequence)\b/i.test(sql || "")
+    || /\balter\s+table\b/i.test(sql || "")
+    || /\balter\s+type\b/i.test(sql || "");
+}
+
 async function runSql(sql) {
   const connection = activeConnection();
   const sqlTab = activeSqlTab();
@@ -6465,6 +6626,10 @@ async function runSql(sql) {
     }, { targetSqlTab: targetTab });
     syncActiveSqlResultState(targetTab);
     renderResults();
+    if (sqlMayChangeSchema(sql)) {
+      await refreshSchema();
+      if (state.currentTableInfo) renderStructure(state.currentTableInfo);
+    }
     saveActiveConnectionTabState();
     pushHistory(sql);
     setReady(`Done in ${formatDuration(response.data.elapsedMs)}`);
